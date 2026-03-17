@@ -32,7 +32,14 @@ class HTTPClient:
         base_url: str,
         api_key: str,
         timeout: float = _DEFAULT_TIMEOUT,
+        *,
+        allow_insecure: bool = False,
     ) -> None:
+        if not allow_insecure and not base_url.startswith("https://"):
+            raise ValueError(
+                "base_url must use HTTPS to protect your API key in transit. "
+                "Pass allow_insecure=True to override (for local development only)."
+            )
         self._base_url = base_url.rstrip("/")
         self._client = httpx.Client(
             base_url=f"{self._base_url}/api/v1/kb",

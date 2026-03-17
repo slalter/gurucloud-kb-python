@@ -36,18 +36,23 @@ class GuruCloudClient:
         *,
         base_url: str = _DEFAULT_BASE_URL,
         timeout: float = 30.0,
+        allow_insecure: bool = False,
     ) -> None:
         """Initialize the client.
 
         Args:
             api_key: KB API key (starts with ``kb_``).
-            base_url: GuruCloud API base URL.
+            base_url: GuruCloud API base URL (must use HTTPS).
             timeout: Request timeout in seconds.
+            allow_insecure: Allow HTTP URLs (for local development only).
         """
         if not api_key.startswith("kb_"):
             raise ValueError("API key must start with 'kb_'")
 
-        self._http = HTTPClient(base_url=base_url, api_key=api_key, timeout=timeout)
+        self._http = HTTPClient(
+            base_url=base_url, api_key=api_key, timeout=timeout,
+            allow_insecure=allow_insecure,
+        )
 
     # ── Knowledge Bank operations ───────────────────────────────
 
