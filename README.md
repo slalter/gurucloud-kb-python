@@ -107,12 +107,16 @@ results = kb.search({
 # Get MCP server definition for agent injection
 mcp_def = kb.get_mcp_server_definition()
 
-# Use in agent config:
+# Use your API key directly for MCP auth:
 mcp_config = {
     "type": "http",
     "url": mcp_def["url"],
-    "headers": {"Authorization": f"Bearer {mcp_def['token']}"}
+    "headers": {"Authorization": f"Bearer {api_key}"}
 }
+
+# Or generate a dedicated PAT (requires admin scope):
+pat_info = kb.generate_pat(token_name="My Agent")
+# pat_info["token"] is a never-expiring PAT for this MCP server
 ```
 
 ## Deduplication Events
