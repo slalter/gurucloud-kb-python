@@ -146,17 +146,18 @@ class TestKnowledgeBankSearch:
         assert len(results) == 1
         assert results[0]["combined_score"] == 0.92
 
-        # Verify the request was structured correctly
+        # Verify the request was structured correctly (API requires query_text)
         sent = json.loads(route.calls[0].request.content)
         assert "content" in sent["dimensions"]
         assert sent["dimensions"]["content"]["query_text"] == "auth tokens"
+        assert "query" not in sent["dimensions"]["content"]
 
     @respx.mock
     def test_multi_dimensional_search(self, client: GuruCloudClient) -> None:
         respx.get(f"{API_PREFIX}/banks/test-kb-uuid").mock(
             return_value=httpx.Response(200, json={"data": KB_INFO})
         )
-        respx.post(f"{API_PREFIX}/banks/test-kb-uuid/search").mock(
+        route = respx.post(f"{API_PREFIX}/banks/test-kb-uuid/search").mock(
             return_value=httpx.Response(200, json={"data": []})
         )
 
@@ -166,9 +167,41 @@ class TestKnowledgeBankSearch:
                 "content": {"query_text": "JWT", "weight": 1.0},
                 "useful_for": {"query_text": "debugging", "weight": 1.5},
             },
+            "combination_mode": "weighted_sum",
+            "metadata_filters": {"status": "resolved"},
             "k": 5,
             "threshold": 0.6,
         })
+
+        sent = json.loads(route.calls[0].request.content)
+        assert sent["dimensions"]["content"]["query_text"] == "JWT"
+        assert sent["dimensions"]["useful_for"]["weight"] == 1.5
+        # combination_mode + metadata_filters pass straight through to the API
+        assert sent["combination_mode"] == "weighted_sum"
+        assert sent["metadata_filters"] == {"status": "resolved"}
+
+    @respx.mock
+    def test_search_normalizes_legacy_aliases(self, client: GuruCloudClient) -> None:
+        """Legacy ``query`` / ``filters`` spellings are rewritten to the
+        canonical ``query_text`` / ``metadata_filters`` the API requires."""
+        respx.get(f"{API_PREFIX}/banks/test-kb-uuid").mock(
+            return_value=httpx.Response(200, json={"data": KB_INFO})
+        )
+        route = respx.post(f"{API_PREFIX}/banks/test-kb-uuid/search").mock(
+            return_value=httpx.Response(200, json={"data": []})
+        )
+
+        kb = client.get_kb("test-kb-uuid")
+        kb.search({
+            "dimensions": {"content": {"query": "JWT", "weight": 2.0}},
+            "filters": {"metadata": {"is_example": True}},
+        })
+
+        sent = json.loads(route.calls[0].request.content)
+        assert sent["dimensions"]["content"]["query_text"] == "JWT"
+        assert "query" not in sent["dimensions"]["content"]
+        assert sent["metadata_filters"] == {"is_example": True}
+        assert "filters" not in sent
 
 
 class TestKnowledgeBankEntries:

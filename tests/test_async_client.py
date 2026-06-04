@@ -156,6 +156,7 @@ class TestAsyncKnowledgeBankSearch:
         sent = json.loads(route.calls[0].request.content)
         assert "content" in sent["dimensions"]
         assert sent["dimensions"]["content"]["query_text"] == "auth tokens"
+        assert "query" not in sent["dimensions"]["content"]
 
     @respx.mock
     @pytest.mark.asyncio
@@ -163,7 +164,7 @@ class TestAsyncKnowledgeBankSearch:
         respx.get(f"{API_PREFIX}/banks/test-kb-uuid").mock(
             return_value=httpx.Response(200, json={"data": KB_INFO})
         )
-        respx.post(f"{API_PREFIX}/banks/test-kb-uuid/search").mock(
+        route = respx.post(f"{API_PREFIX}/banks/test-kb-uuid/search").mock(
             return_value=httpx.Response(200, json={"data": []})
         )
 
@@ -173,9 +174,39 @@ class TestAsyncKnowledgeBankSearch:
                 "content": {"query_text": "JWT", "weight": 1.0},
                 "useful_for": {"query_text": "debugging", "weight": 1.5},
             },
+            "combination_mode": "weighted_sum",
+            "metadata_filters": {"status": "resolved"},
             "k": 5,
             "threshold": 0.6,
         })
+
+        sent = json.loads(route.calls[0].request.content)
+        assert sent["dimensions"]["content"]["query_text"] == "JWT"
+        assert sent["combination_mode"] == "weighted_sum"
+        assert sent["metadata_filters"] == {"status": "resolved"}
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_search_normalizes_legacy_aliases(
+        self, client: AsyncGuruCloudClient
+    ) -> None:
+        respx.get(f"{API_PREFIX}/banks/test-kb-uuid").mock(
+            return_value=httpx.Response(200, json={"data": KB_INFO})
+        )
+        route = respx.post(f"{API_PREFIX}/banks/test-kb-uuid/search").mock(
+            return_value=httpx.Response(200, json={"data": []})
+        )
+
+        kb = await client.get_kb("test-kb-uuid")
+        await kb.search({
+            "dimensions": {"content": {"query": "JWT", "weight": 2.0}},
+            "filters": {"metadata": {"is_example": True}},
+        })
+
+        sent = json.loads(route.calls[0].request.content)
+        assert sent["dimensions"]["content"]["query_text"] == "JWT"
+        assert sent["metadata_filters"] == {"is_example": True}
+        assert "filters" not in sent
 
 
 class TestAsyncKnowledgeBankEntries:

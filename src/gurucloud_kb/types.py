@@ -5,16 +5,46 @@ All types use TypedDict for zero-dependency, static-typing-friendly contracts.
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
+
+
+# ── Enumerated value types (self-documenting) ───────────────────
+
+
+DimensionType = Literal["single", "multi", "text_only"]
+"""How a dimension is stored and searched.
+
+- ``"single"``    — one embedding per entry (e.g. ``content``, ``useful_for``).
+- ``"multi"``     — many values per entry, each embedded, aggregated at search
+  time (e.g. ``relevant_systems = ["flask", "jwt"]``). Matches ANY value.
+- ``"text_only"`` — stored as text, NOT embedded. Reserved for future
+  exact-match filters; not searchable today.
+"""
+
+Aggregation = Literal["max", "avg", "min", "top_k_avg", "sum", "count"]
+"""How multiple matches inside one MULTI dimension collapse to a single
+dimension score. ``"top_k_avg"`` averages the best ``top_k`` matches."""
+
+CombinationMode = Literal[
+    "weighted_sum", "weighted_product", "max", "min", "custom"
+]
+"""How per-dimension scores combine into the final ranking score.
+``"custom"`` requires a ``custom_formula`` SQL expression that references
+each dimension's score as ``<dimension_name>_score``."""
 
 
 # ── Knowledge Bank ──────────────────────────────────────────────
 
 
-class KBInfo(TypedDict, total=False):
-    """Knowledge Bank metadata returned by the API."""
+class _KBInfoBase(TypedDict):
+    """Fields always present on a Knowledge Bank."""
 
     kb_id: str
+
+
+class KBInfo(_KBInfoBase, total=False):
+    """Knowledge Bank metadata returned by the API."""
+
     name: str
     description: str
     entry_count: int
@@ -38,10 +68,11 @@ class DimensionConfig(TypedDict, total=False):
     name: str
     display_name: str
     description: str
-    dimension_type: str  # "single" | "multi" | "text_only"
+    dimension_type: DimensionType
     required: bool
     default_weight: float
-    aggregation: str
+    aggregation: Aggregation
+    top_k: int
     max_items: int
     searchable: bool
     show_in_results: bool
@@ -65,7 +96,7 @@ class DimensionSchema(TypedDict, total=False):
     version: int
     dimensions: list[DimensionConfig]
     categories: list[CategoryConfig]
-    combination_mode: str  # "weighted_sum" | "weighted_product" | "max" | "min" | "custom"
+    combination_mode: CombinationMode
 
 
 class SchemaWarning(TypedDict, total=False):
@@ -113,19 +144,61 @@ SearchResult = EntryResult
 
 
 class DimensionQuery(TypedDict, total=False):
-    """Query parameters for a single search dimension."""
+    """Query parameters for a single search dimension.
+
+    ``query_text`` is the text embedded and compared (cosine) against this
+    dimension's vectors — this is the field the API requires, **not**
+    ``query``. ``weight`` scales this dimension's contribution to the
+    combined score (falls back to the dimension's schema weight when
+    omitted). The remaining fields override the dimension's defaults for
+    this one query.
+    """
 
     query_text: str
     weight: float
+    aggregation: Aggregation
+    top_k: int
+    min_threshold: float
+
+
+class CategoryFilter(TypedDict, total=False):
+    """Bucket results by a metadata tag, each with its own cap/threshold."""
+
+    tag: str
+    max_results: int
+    min_score: float
 
 
 class SearchRequest(TypedDict, total=False):
-    """Multi-dimensional semantic search request."""
+    """Multi-dimensional weighted semantic search request.
+
+    Map each dimension name to a :class:`DimensionQuery`; their scores are
+    combined per ``combination_mode`` using each dimension's ``weight``.
+    ``metadata_filters`` is an exact JSONB-containment filter on entry
+    metadata (e.g. ``{"status": "resolved"}``) — note the field name is
+    ``metadata_filters``, not ``filters``.
+
+    Example::
+
+        {
+            "dimensions": {
+                "content": {"query_text": "login loops", "weight": 2.0},
+                "products": {"query_text": "mobile app", "weight": 0.5},
+            },
+            "combination_mode": "weighted_sum",
+            "metadata_filters": {"status": "resolved"},
+            "k": 10,
+            "threshold": 0.35,
+        }
+    """
 
     dimensions: dict[str, DimensionQuery]
     k: int
     threshold: float
-    filters: dict[str, Any]
+    combination_mode: CombinationMode
+    custom_formula: str
+    metadata_filters: dict[str, Any]
+    category_filters: list[CategoryFilter]
 
 
 # ── MCP Server Definition ──────────────────────────────────────

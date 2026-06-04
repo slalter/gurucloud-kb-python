@@ -31,15 +31,19 @@ from gurucloud_kb.errors import (
 )
 from gurucloud_kb.kb import KnowledgeBank
 from gurucloud_kb.types import (
+    Aggregation,
     APIKeyInfo,
     BatchIngestResult,
     CategoryConfig,
+    CategoryFilter,
+    CombinationMode,
     DeduplicationEvent,
     DeduplicationEventList,
     DeduplicationEventSummary,
     DimensionConfig,
     DimensionQuery,
     DimensionSchema,
+    DimensionType,
     EntryEventLog,
     EntryEventLogList,
     EntryInput,
@@ -69,7 +73,11 @@ __all__ = [
     # Types
     "KBInfo",
     "DimensionConfig",
+    "DimensionType",
+    "Aggregation",
+    "CombinationMode",
     "CategoryConfig",
+    "CategoryFilter",
     "DimensionSchema",
     "SchemaWarning",
     "EntryInput",
@@ -87,4 +95,4 @@ __all__ = [
     "EntryEventLogList",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"

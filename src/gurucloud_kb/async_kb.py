@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from gurucloud_kb._async_http import AsyncHTTPClient
+from gurucloud_kb._search import build_string_search, normalize_search_request
 from gurucloud_kb.types import (
     BatchIngestResult,
     DeduplicationEvent,
@@ -159,28 +160,44 @@ class AsyncKnowledgeBank:
     ) -> list[SearchResult]:
         """Semantic search across the KB.
 
-        Accepts either a simple string query (searches the ``content``
-        dimension) or a full :class:`SearchRequest` dict for
-        multi-dimensional search.
+        Pass a **string** for a quick single-dimension search of
+        ``content``, or a full :class:`SearchRequest` for multi-dimensional
+        weighted search.
+
+        For multi-dimensional search, map each dimension name to a
+        :class:`DimensionQuery`. Every dimension is embedded and compared
+        independently, then the per-dimension scores are combined using
+        ``combination_mode`` and each dimension's ``weight``::
+
+            await kb.search({
+                "dimensions": {
+                    "symptom":  {"query_text": "login loops", "weight": 2.0},
+                    "products": {"query_text": "mobile app",  "weight": 0.5},
+                },
+                "combination_mode": "weighted_sum",
+                "metadata_filters": {"status": "resolved"},
+                "k": 10,
+                "threshold": 0.35,
+            })
+
+        The required per-dimension key is ``query_text`` and exact filters
+        go under ``metadata_filters``. Legacy ``query`` / ``filters``
+        spellings are accepted and normalized for you.
 
         Args:
-            query: Search string or full SearchRequest.
-            k: Number of results (only used with string queries).
-            threshold: Minimum similarity score (only used with string queries).
+            query: A search string, or a full :class:`SearchRequest` dict.
+            k: Number of results — applied only to string queries (for a
+                dict, set ``k`` inside it).
+            threshold: Minimum combined score — applied only to string
+                queries (for a dict, set ``threshold`` inside it).
 
         Returns:
-            List of matching entries with scores.
+            List of matching entries with per-dimension and combined scores.
         """
         if isinstance(query, str):
-            request: SearchRequest = {
-                "dimensions": {
-                    "content": {"query_text": query, "weight": 1.0},
-                },
-                "k": k,
-                "threshold": threshold,
-            }
+            request = build_string_search(query, k, threshold)
         else:
-            request = query
+            request = normalize_search_request(query)
 
         return await self._http.post(self._path("/search"), json=request)
 
@@ -195,12 +212,30 @@ class AsyncKnowledgeBank:
         return await self._http.get(self._path("/mcp-tools"))
 
     async def get_mcp_server_definition(self) -> MCPServerDefinition:
-        """Get everything needed to inject this KB's MCP server into an agent.
+        """Get the MCP server definition for agent injection.
 
-        Returns the MCP URL, a pre-minted Personal Access Token,
-        available tools, and OAuth metadata.
+        Returns the MCP URL, server name, and available tools.
+        Use your KB API key as the Bearer token for MCP requests,
+        or generate a PAT via :meth:`generate_pat`.
         """
         return await self._http.post(self._path("/mcp-server-definition"))
+
+    async def generate_pat(self, token_name: str = "SDK Token") -> dict:
+        """Generate a Personal Access Token for this KB's MCP server.
+
+        Creates a never-expiring PAT for MCP authentication.
+        Requires ``admin`` scope on your API key.
+
+        Args:
+            token_name: Human-readable label for the token.
+
+        Returns:
+            Dict with ``token``, ``server_url``, ``token_name``, ``note``.
+        """
+        return await self._http.post(
+            self._path("/generate-pat"),
+            json={"token_name": token_name},
+        )
 
     # ── deduplication events ───────────────────────────────────
 
