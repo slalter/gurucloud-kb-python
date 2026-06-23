@@ -78,6 +78,8 @@ class AsyncGuruCloudClient:
         *,
         description: str = "",
         dimension_schema: DimensionSchema | None = None,
+        allow_updates: bool | None = None,
+        response_fields: list[str] | None = None,
     ) -> AsyncKnowledgeBank:
         """Create a new Knowledge Bank.
 
@@ -85,6 +87,15 @@ class AsyncGuruCloudClient:
             name: Human-readable KB name.
             description: Optional description.
             dimension_schema: Optional custom schema (uses default if omitted).
+            allow_updates: Optional dedup policy. ``False`` makes the KB
+                accumulate-only — it never UPDATE/CONFLICT-merges (the dedup
+                verdict is downgraded to ``new``); true duplicates are still
+                skipped via ``redundant``. Defaults to the schema default
+                (``True``).
+            response_fields: Optional per-KB allowlist of EXTRA keys the MCP
+                tools return on each result, beyond the always-present ``id`` +
+                ``content`` (e.g. ``["useful_for", "source"]``). Defaults to the
+                schema default (``id`` + ``content`` only).
 
         Returns:
             An :class:`AsyncKnowledgeBank` instance for the new KB.
@@ -92,6 +103,10 @@ class AsyncGuruCloudClient:
         payload: dict[str, Any] = {"name": name, "description": description}
         if dimension_schema is not None:
             payload["dimension_schema"] = dimension_schema
+        if allow_updates is not None:
+            payload["allow_updates"] = allow_updates
+        if response_fields is not None:
+            payload["mcp_response_fields"] = response_fields
 
         info: KBInfo = await self._http.post("/banks", json=payload)
         return AsyncKnowledgeBank(self._http, info)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from gurucloud_kb._search import build_string_search, normalize_search_request
 
 
@@ -73,3 +75,50 @@ def test_normalize_does_not_mutate_input() -> None:
     original = {"dimensions": {"content": {"query": "x"}}, "filters": {"a": 1}}
     normalize_search_request(original)
     assert original == {"dimensions": {"content": {"query": "x"}}, "filters": {"a": 1}}
+
+
+# ── time-window filtering ───────────────────────────────────────
+
+
+def test_build_string_search_omits_time_bounds_by_default() -> None:
+    req = build_string_search("x", k=5, threshold=0.3)
+    for key in ("created_after", "created_before", "updated_after", "updated_before"):
+        assert key not in req
+
+
+def test_build_string_search_serializes_datetime_bound() -> None:
+    dt = datetime(2026, 5, 1, 0, 0, 0, tzinfo=timezone.utc)
+    req = build_string_search("x", k=5, threshold=0.3, created_after=dt)
+    assert req["created_after"] == dt.isoformat()
+
+
+def test_build_string_search_passes_string_bounds_through() -> None:
+    req = build_string_search(
+        "x", k=5, threshold=0.3,
+        created_after="2026-05-01", created_before="2026-06-01",
+        updated_after="2026-05-15", updated_before="2026-06-15",
+    )
+    assert req["created_after"] == "2026-05-01"
+    assert req["created_before"] == "2026-06-01"
+    assert req["updated_after"] == "2026-05-15"
+    assert req["updated_before"] == "2026-06-15"
+
+
+def test_normalize_serializes_datetime_time_bounds() -> None:
+    dt = datetime(2026, 5, 1, 12, 30, tzinfo=timezone.utc)
+    out = normalize_search_request(
+        {"dimensions": {"content": {"query_text": "x"}}, "created_after": dt}
+    )
+    assert out["created_after"] == dt.isoformat()
+
+
+def test_normalize_passes_string_time_bounds_through() -> None:
+    out = normalize_search_request(
+        {
+            "dimensions": {"content": {"query_text": "x"}},
+            "created_after": "2026-05-01T00:00:00Z",
+            "updated_before": "2026-06-01",
+        }
+    )
+    assert out["created_after"] == "2026-05-01T00:00:00Z"
+    assert out["updated_before"] == "2026-06-01"

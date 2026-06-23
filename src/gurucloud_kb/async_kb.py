@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from gurucloud_kb._async_http import AsyncHTTPClient
 from gurucloud_kb._search import build_string_search, normalize_search_request
 from gurucloud_kb.types import (
     BatchIngestResult,
+    ClusterAlgorithm,
+    ClusteringResult,
+    ClusterMethod,
     DeduplicationEvent,
     DeduplicationEventList,
     DimensionConfig,
@@ -99,6 +103,30 @@ class AsyncKnowledgeBank:
         """Remove a dimension by name. Requires ``admin`` scope."""
         return await self._http.delete(self._path(f"/schema/dimensions/{name}"))
 
+    async def set_allow_updates(self, value: bool) -> dict[str, Any]:
+        """Enable/disable dedup updates for this KB. Requires ``write`` scope.
+
+        When ``False`` the KB is accumulate-only: the dedup LLM's
+        ``update``/``conflict`` verdicts are downgraded to ``new`` so existing
+        entries are never overwritten or deleted (a rollup/synthesis lands as
+        its own entry). True duplicates are still skipped via ``redundant``.
+        """
+        return await self._http.patch(self._path(), json={"allow_updates": value})
+
+    async def set_response_fields(self, fields: list[str] | None) -> dict[str, Any]:
+        """Set which EXTRA keys this KB's MCP tools return. Requires ``write`` scope.
+
+        ``fields`` is an allowlist of result keys surfaced on each MCP result
+        beyond the always-present ``id`` + ``content`` (e.g.
+        ``["useful_for", "source"]``). Pass ``None`` or ``[]`` to reset to the
+        default ``id`` + ``content`` only shape. Allowed values are the standard
+        result fields plus this KB's own dimension names; unknown keys are
+        rejected by the API.
+        """
+        return await self._http.patch(
+            self._path(), json={"mcp_response_fields": fields or None}
+        )
+
     # ── entry management ────────────────────────────────────────
 
     async def list_entries(
@@ -157,6 +185,10 @@ class AsyncKnowledgeBank:
         *,
         k: int = 10,
         threshold: float = 0.5,
+        created_after: str | datetime | None = None,
+        created_before: str | datetime | None = None,
+        updated_after: str | datetime | None = None,
+        updated_before: str | datetime | None = None,
     ) -> list[SearchResult]:
         """Semantic search across the KB.
 
@@ -190,16 +222,140 @@ class AsyncKnowledgeBank:
                 dict, set ``k`` inside it).
             threshold: Minimum combined score — applied only to string
                 queries (for a dict, set ``threshold`` inside it).
+            created_after, created_before, updated_after, updated_before:
+                Optional **hard time-window filter** on entry timestamps (UTC).
+                Accepts an ISO-8601 string or a ``datetime``. Applied to string
+                queries; for a dict query set the same keys inside it. Removes
+                out-of-window entries without affecting the ranking.
 
         Returns:
             List of matching entries with per-dimension and combined scores.
         """
         if isinstance(query, str):
-            request = build_string_search(query, k, threshold)
+            request = build_string_search(
+                query,
+                k,
+                threshold,
+                created_after=created_after,
+                created_before=created_before,
+                updated_after=updated_after,
+                updated_before=updated_before,
+            )
         else:
             request = normalize_search_request(query)
 
         return await self._http.post(self._path("/search"), json=request)
+
+    # ── clustering ──────────────────────────────────────────────
+
+    async def cluster(
+        self,
+        *,
+        fields: list[str] | None = None,
+        method: ClusterMethod = "auto",
+        algorithm: ClusterAlgorithm = "auto",
+        k: int | None = None,
+        min_cluster_size: int = 5,
+        metric: str = "cosine",
+        similarity_threshold: float = 0.85,
+        search: SearchRequest | None = None,
+        scope_limit: int = 2000,
+        include_members: bool = True,
+        max_members_per_cluster: int = 10,
+        label: bool = False,
+    ) -> ClusteringResult:
+        """Group the KB's entries by one or more fields (async).
+
+        See :meth:`gurucloud_kb.kb.KnowledgeBank.cluster` for full semantics:
+        each field is grouped independently — embedding dimensions by vector
+        similarity, other fields (metadata keys, ``source``, ``text_only``
+        dimensions) by fuzzy string match — and ``search`` scopes which entries
+        are clustered.
+        """
+        body: dict[str, Any] = {
+            "fields": list(fields) if fields is not None else ["content"],
+            "method": method,
+            "algorithm": algorithm,
+            "min_cluster_size": min_cluster_size,
+            "metric": metric,
+            "similarity_threshold": similarity_threshold,
+            "scope_limit": scope_limit,
+            "include_members": include_members,
+            "max_members_per_cluster": max_members_per_cluster,
+            "label": label,
+        }
+        if k is not None:
+            body["k"] = k
+        if search is not None:
+            body["search"] = normalize_search_request(search)
+        return await self._http.post(self._path("/cluster"), json=body)
+
+    # ── retrieval assertions ────────────────────────────────────
+
+    async def add_assertion(
+        self,
+        entry_id: str,
+        query: str | dict[str, Any],
+        *,
+        notes: str | None = None,
+    ) -> dict[str, Any]:
+        """Add a retrieval assertion: a query that SHOULD return ``entry_id``.
+
+        ``query`` is a string (matched against the ``content`` dimension) or a
+        dict of dimensions (``content`` / ``useful_for`` / ``relevant_systems``
+        / ``relevant_tasks``). The entry's baseline rank against live search is
+        captured immediately, then re-checked by the eval over time.
+        """
+        body: dict[str, Any] = {"entry_id": entry_id, "query": query}
+        if notes is not None:
+            body["notes"] = notes
+        return await self._http.post(self._path("/assertions"), json=body)
+
+    async def list_assertions(
+        self,
+        *,
+        entry_id: str | None = None,
+        active_only: bool = True,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List retrieval assertions for this KB (optionally one entry)."""
+        params: dict[str, Any] = {
+            "limit": limit,
+            "offset": offset,
+            "active_only": "true" if active_only else "false",
+        }
+        if entry_id is not None:
+            params["entry_id"] = entry_id
+        return await self._http.get(self._path("/assertions"), params=params)
+
+    async def get_assertion(self, assertion_id: str) -> dict[str, Any]:
+        """Get a single retrieval assertion by id."""
+        return await self._http.get(self._path(f"/assertions/{assertion_id}"))
+
+    async def delete_assertion(self, assertion_id: str) -> dict[str, Any]:
+        """Deactivate a retrieval assertion (soft-delete; history preserved)."""
+        return await self._http.delete(self._path(f"/assertions/{assertion_id}"))
+
+    # ── retrieval eval ──────────────────────────────────────────
+
+    async def run_retrieval_eval(self) -> dict[str, Any]:
+        """Run the retrieval-assertion eval for this KB now (blocking).
+
+        Re-scores every active assertion against live search and returns the
+        run summary (hit@k, MRR, mean/median rank, per-verdict counts).
+        """
+        return await self._http.post(self._path("/retrieval-eval/run"))
+
+    async def list_eval_runs(self, *, limit: int = 25) -> list[dict[str, Any]]:
+        """List recent retrieval-eval runs for this KB (newest first)."""
+        return await self._http.get(
+            self._path("/retrieval-eval/runs"), params={"limit": limit}
+        )
+
+    async def get_eval_run(self, run_id: str) -> dict[str, Any]:
+        """Get one retrieval-eval run with its per-assertion rows."""
+        return await self._http.get(self._path(f"/retrieval-eval/runs/{run_id}"))
 
     # ── MCP integration ─────────────────────────────────────────
 

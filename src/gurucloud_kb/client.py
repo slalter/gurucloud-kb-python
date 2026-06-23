@@ -81,13 +81,28 @@ class GuruCloudClient:
         *,
         description: str = "",
         dimension_schema: DimensionSchema | None = None,
+        allow_updates: bool | None = None,
+        response_fields: list[str] | None = None,
     ) -> KnowledgeBank:
         """Create a new Knowledge Bank.
 
         Args:
             name: Human-readable KB name.
-            description: Optional description.
+            description: Optional but recommended. The KB's "what is this /
+                when should I use it" guidance — surfaced to agents at the MCP
+                handshake via ``initialize.instructions``. A specific
+                description (purpose, what's inside, domain conventions)
+                materially improves how agents query the KB.
             dimension_schema: Optional custom schema (uses default if omitted).
+            allow_updates: Optional dedup policy. ``False`` makes the KB
+                accumulate-only — it never UPDATE/CONFLICT-merges (the dedup
+                verdict is downgraded to ``new``); true duplicates are still
+                skipped via ``redundant``. Defaults to the schema default
+                (``True``).
+            response_fields: Optional per-KB allowlist of EXTRA keys the MCP
+                tools return on each result, beyond the always-present ``id`` +
+                ``content`` (e.g. ``["useful_for", "source"]``). Defaults to the
+                schema default (``id`` + ``content`` only).
 
         Returns:
             A :class:`KnowledgeBank` instance for the new KB.
@@ -95,6 +110,10 @@ class GuruCloudClient:
         payload: dict[str, Any] = {"name": name, "description": description}
         if dimension_schema is not None:
             payload["dimension_schema"] = dimension_schema
+        if allow_updates is not None:
+            payload["allow_updates"] = allow_updates
+        if response_fields is not None:
+            payload["mcp_response_fields"] = response_fields
 
         info: KBInfo = self._http.post("/banks", json=payload)
         return KnowledgeBank(self._http, info)

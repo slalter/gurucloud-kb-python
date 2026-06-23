@@ -126,6 +126,35 @@ class TestCreateKB:
         sent_body = json.loads(route.calls[0].request.content)
         assert "dimension_schema" in sent_body
 
+    @respx.mock
+    def test_create_kb_with_allow_updates(self, client: GuruCloudClient) -> None:
+        route = respx.post(f"{API_PREFIX}/banks").mock(
+            return_value=httpx.Response(201, json={"data": KB_INFO})
+        )
+        client.create_kb("Accumulate KB", allow_updates=False)
+        sent_body = json.loads(route.calls[0].request.content)
+        assert sent_body["allow_updates"] is False
+
+    @respx.mock
+    def test_create_kb_with_response_fields(self, client: GuruCloudClient) -> None:
+        route = respx.post(f"{API_PREFIX}/banks").mock(
+            return_value=httpx.Response(201, json={"data": KB_INFO})
+        )
+        client.create_kb("Rich KB", response_fields=["useful_for", "source"])
+        sent_body = json.loads(route.calls[0].request.content)
+        assert sent_body["mcp_response_fields"] == ["useful_for", "source"]
+
+    @respx.mock
+    def test_create_kb_without_response_fields_omits_key(
+        self, client: GuruCloudClient
+    ) -> None:
+        route = respx.post(f"{API_PREFIX}/banks").mock(
+            return_value=httpx.Response(201, json={"data": KB_INFO})
+        )
+        client.create_kb("Plain KB")
+        sent_body = json.loads(route.calls[0].request.content)
+        assert "mcp_response_fields" not in sent_body
+
 
 class TestKnowledgeBankSearch:
     @respx.mock
@@ -276,6 +305,47 @@ class TestKnowledgeBankSchema:
         kb = client.get_kb("test-kb-uuid")
         result = kb.add_dimension({"name": "priority", "dimension_type": "single"})
         assert result["dimension"] == "priority"
+
+    @respx.mock
+    def test_set_allow_updates(self, client: GuruCloudClient) -> None:
+        respx.get(f"{API_PREFIX}/banks/test-kb-uuid").mock(
+            return_value=httpx.Response(200, json={"data": KB_INFO})
+        )
+        route = respx.patch(f"{API_PREFIX}/banks/test-kb-uuid").mock(
+            return_value=httpx.Response(200, json={"data": KB_INFO})
+        )
+        kb = client.get_kb("test-kb-uuid")
+        kb.set_allow_updates(False)
+        sent_body = json.loads(route.calls[0].request.content)
+        assert sent_body == {"allow_updates": False}
+
+    @respx.mock
+    def test_set_response_fields(self, client: GuruCloudClient) -> None:
+        respx.get(f"{API_PREFIX}/banks/test-kb-uuid").mock(
+            return_value=httpx.Response(200, json={"data": KB_INFO})
+        )
+        route = respx.patch(f"{API_PREFIX}/banks/test-kb-uuid").mock(
+            return_value=httpx.Response(200, json={"data": KB_INFO})
+        )
+        kb = client.get_kb("test-kb-uuid")
+        kb.set_response_fields(["useful_for", "source"])
+        sent_body = json.loads(route.calls[0].request.content)
+        assert sent_body == {"mcp_response_fields": ["useful_for", "source"]}
+
+    @respx.mock
+    def test_set_response_fields_empty_resets_to_none(
+        self, client: GuruCloudClient
+    ) -> None:
+        respx.get(f"{API_PREFIX}/banks/test-kb-uuid").mock(
+            return_value=httpx.Response(200, json={"data": KB_INFO})
+        )
+        route = respx.patch(f"{API_PREFIX}/banks/test-kb-uuid").mock(
+            return_value=httpx.Response(200, json={"data": KB_INFO})
+        )
+        kb = client.get_kb("test-kb-uuid")
+        kb.set_response_fields([])
+        sent_body = json.loads(route.calls[0].request.content)
+        assert sent_body == {"mcp_response_fields": None}
 
 
 class TestKnowledgeBankBatchIngest:

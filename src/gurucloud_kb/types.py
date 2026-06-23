@@ -5,6 +5,7 @@ All types use TypedDict for zero-dependency, static-typing-friendly contracts.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal, TypedDict
 
 
@@ -17,8 +18,14 @@ DimensionType = Literal["single", "multi", "text_only"]
 - ``"single"``    — one embedding per entry (e.g. ``content``, ``useful_for``).
 - ``"multi"``     — many values per entry, each embedded, aggregated at search
   time (e.g. ``relevant_systems = ["flask", "jwt"]``). Matches ANY value.
-- ``"text_only"`` — stored as text, NOT embedded. Reserved for future
-  exact-match filters; not searchable today.
+- ``"text_only"`` — stored (in entry metadata) but NOT embedded; used for
+  non-semantic **exact-match** filtering of IDs / tags / enums. Supplying a
+  ``text_only`` dimension in a search applies an exact-match filter
+  (equivalent to a ``metadata_filters`` entry) rather than semantic ranking,
+  so it never contributes to the score. A search must therefore include at
+  least one ``single``/``multi`` dimension as well; a search of only
+  ``text_only`` dimensions is rejected. Set ``searchable=False`` to store the
+  value without exposing it as a search filter.
 """
 
 Aggregation = Literal["max", "avg", "min", "top_k_avg", "sum", "count"]
@@ -76,6 +83,11 @@ class DimensionConfig(TypedDict, total=False):
     max_items: int
     searchable: bool
     show_in_results: bool
+    """DEPRECATED / not enforced. This per-dimension flag does NOT control what
+    the MCP tools (``query_knowledge_bank``, ``narrate``) return — nothing reads
+    it. Choose the returned keys per-KB with :attr:`DimensionSchema.mcp_response_fields`
+    (``id`` + ``content`` are always returned). Kept only for backward
+    compatibility of stored schemas."""
 
 
 class CategoryConfig(TypedDict, total=False):
@@ -97,6 +109,19 @@ class DimensionSchema(TypedDict, total=False):
     dimensions: list[DimensionConfig]
     categories: list[CategoryConfig]
     combination_mode: CombinationMode
+    allow_updates: bool
+    """Dedup policy. When ``False`` the KB never UPDATE/CONFLICT-merges — the
+    dedup verdict is downgraded to ``new`` so the KB only accumulates (true
+    duplicates are still skipped via ``redundant``). Defaults to ``True``."""
+    mcp_response_fields: list[str]
+    """Per-KB allowlist of EXTRA keys the MCP tools (``query_knowledge_bank``,
+    ``narrate``) return on each result, beyond the always-present ``id`` +
+    ``content``. ``None``/empty (the default) returns ``id`` + ``content`` only.
+    Allowed values: the standard result fields (``useful_for``,
+    ``relevant_systems``, ``relevant_tasks``, ``relevant_file_paths``,
+    ``source``, ``metadata``, ``combined_score``, ``created_at``,
+    ``updated_at``) plus the KB's own dimension names. Only affects the MCP
+    response shape; the REST API and stored data are unchanged."""
 
 
 class SchemaWarning(TypedDict, total=False):
@@ -134,6 +159,7 @@ class EntryResult(TypedDict, total=False):
     source: str
     combined_score: float
     created_at: str
+    updated_at: str
 
 
 # Search results have the same shape as entries (with scores populated)
@@ -178,6 +204,11 @@ class SearchRequest(TypedDict, total=False):
     metadata (e.g. ``{"status": "resolved"}``) — note the field name is
     ``metadata_filters``, not ``filters``.
 
+    The ``created_after`` / ``created_before`` / ``updated_after`` /
+    ``updated_before`` keys add a **hard time-window filter** on entry
+    timestamps (UTC). Accepts an ISO-8601 string or a ``datetime`` (serialized
+    for you). It removes out-of-window rows without affecting the ranking.
+
     Example::
 
         {
@@ -187,6 +218,7 @@ class SearchRequest(TypedDict, total=False):
             },
             "combination_mode": "weighted_sum",
             "metadata_filters": {"status": "resolved"},
+            "created_after": "2026-05-01T00:00:00Z",
             "k": 10,
             "threshold": 0.35,
         }
@@ -199,6 +231,74 @@ class SearchRequest(TypedDict, total=False):
     custom_formula: str
     metadata_filters: dict[str, Any]
     category_filters: list[CategoryFilter]
+    created_after: str | datetime
+    created_before: str | datetime
+    updated_after: str | datetime
+    updated_before: str | datetime
+
+
+# ── Clustering ──────────────────────────────────────────────────
+
+
+ClusterMethod = Literal["auto", "vector", "fuzzy"]
+"""How to group a field's values. ``"auto"`` picks by field type: a SINGLE
+embedding dimension → ``"vector"``; anything else → ``"fuzzy"``."""
+
+ClusterAlgorithm = Literal["auto", "kmeans", "agglomerative", "hdbscan"]
+"""Vector-clustering algorithm. ``"auto"`` → HDBSCAN when ``k`` is omitted,
+else KMeans."""
+
+
+class ClusterMember(TypedDict, total=False):
+    """One entry within a cluster."""
+
+    id: str
+    value: str | None  # the field value (fuzzy)
+    content: str | None  # short content snippet (vector)
+    distance: float | None  # distance to centroid (vector)
+
+
+class ClusterGroup(TypedDict, total=False):
+    """A single cluster of entries."""
+
+    cluster_id: int
+    size: int
+    label: str | None
+    key: str | None  # representative value (fuzzy)
+    keywords: list[str]
+    representative_entry_ids: list[str]
+    values: list[str]  # distinct values in the group (fuzzy)
+    members: list[ClusterMember]
+
+
+class FieldClusterResult(TypedDict, total=False):
+    """Clustering result for one field."""
+
+    field: str
+    method: ClusterMethod
+    algorithm: ClusterAlgorithm | None  # vector only (resolved)
+    similarity_threshold: float | None  # fuzzy only
+    cluster_count: int
+    clustered_count: int
+    noise_count: int
+    silhouette_score: float | None  # vector only
+    clusters: list[ClusterGroup]
+
+
+class ClusterScope(TypedDict, total=False):
+    """Which entries were clustered."""
+
+    source: str  # "all" | "search"
+    entry_count: int
+    truncated: bool
+
+
+class ClusteringResult(TypedDict, total=False):
+    """Per-field clustering of a KB's entries (returned by :meth:`cluster`)."""
+
+    kb_id: str | None
+    scope: ClusterScope
+    results: list[FieldClusterResult]
 
 
 # ── MCP Server Definition ──────────────────────────────────────

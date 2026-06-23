@@ -35,6 +35,13 @@ from gurucloud_kb.types import (
     APIKeyInfo,
     BatchIngestResult,
     CategoryConfig,
+    ClusterAlgorithm,
+    ClusterGroup,
+    ClusteringResult,
+    ClusterMember,
+    ClusterMethod,
+    ClusterScope,
+    FieldClusterResult,
     CategoryFilter,
     CombinationMode,
     DeduplicationEvent,
@@ -88,6 +95,13 @@ __all__ = [
     "MCPServerDefinition",
     "APIKeyInfo",
     "BatchIngestResult",
+    "ClusterMethod",
+    "ClusterAlgorithm",
+    "ClusterMember",
+    "ClusterGroup",
+    "FieldClusterResult",
+    "ClusterScope",
+    "ClusteringResult",
     "DeduplicationEvent",
     "DeduplicationEventSummary",
     "DeduplicationEventList",
@@ -95,4 +109,4 @@ __all__ = [
     "EntryEventLogList",
 ]
 
-__version__ = "0.1.1"
+__version__ = "0.1.5"
