@@ -85,6 +85,27 @@ If you omit `dimension_schema`, you get the default 4-dimension schema
 > (`text-embedding-3-small`, 1536-dim). The model is not currently
 > selectable through the SDK.
 
+### Update the name / description (and the agent-facing instructions)
+
+A KB's **description** is its canonical "what is this / when should I use it"
+text. It is not just metadata: it's the text agents receive at the MCP handshake
+as `initialize.instructions`, and it's the `description` field returned by
+`get_mcp_server_definition()`. Update it in place — there is no separate setter
+for those agent-facing surfaces, and they refresh from this one field:
+
+```python
+kb.update(description="Resolved support tickets. Query before triage; cite ticket IDs.")
+kb.update(name="Support KB", description="...")     # both at once (write scope)
+client.update_kb(kb.id, description="...")          # equivalent, by id
+```
+
+After an update, the next agent that connects sees the new text as
+`initialize.instructions`, and `get_mcp_server_definition()["description"]`
+returns it too. Pass `description=""` to clear it (the server-def description
+then falls back to the KB name).
+
+> **REST API.** `PATCH /api/v1/kb/banks/{id}` with `{"description": "..."}`.
+
 ### Accumulate-only KBs (never overwrite or delete)
 
 By default, deduplication may **merge** a near-duplicate into an existing entry

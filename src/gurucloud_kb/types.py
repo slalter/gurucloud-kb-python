@@ -311,6 +311,10 @@ class MCPServerDefinition(TypedDict, total=False):
     type: str  # always "http"
     url: str
     description: str
+    """The KB's own description (falls back to the KB name if unset) — the same
+    text agents receive at the MCP handshake as ``initialize.instructions``. Set
+    it in place via ``client.update_kb(kb_id, description=...)`` or
+    ``kb.update(description=...)``."""
     token: str
     oauth_discovery_url: str
     oauth_client_id: str

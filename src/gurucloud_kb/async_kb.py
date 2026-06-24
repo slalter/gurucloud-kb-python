@@ -127,6 +127,38 @@ class AsyncKnowledgeBank:
             self._path(), json={"mcp_response_fields": fields or None}
         )
 
+    async def update(
+        self,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> KBInfo:
+        """Update this KB's name and/or description in place. Requires ``write`` scope.
+
+        The **description** is the canonical "what is this / when should I use
+        it" text for the KB. Setting it here is the in-place way to refresh every
+        agent-facing surface derived from it — the MCP handshake
+        ``initialize.instructions`` an agent receives on connect AND the
+        ``description`` field returned by :meth:`get_mcp_server_definition`. There
+        is no separate setter for those. Pass ``description=""`` to clear it.
+
+        At least one of ``name`` / ``description`` must be given. Refreshes the
+        cached :attr:`info` and returns it.
+
+        Example::
+
+            await kb.update(description="Resolved support tickets. Query before triage.")
+        """
+        updates: dict[str, str] = {}
+        if name is not None:
+            updates["name"] = name
+        if description is not None:
+            updates["description"] = description
+        if not updates:
+            raise ValueError("update() requires name and/or description")
+        self._info = await self._http.patch(self._path(), json=updates)
+        return self._info
+
     # ── entry management ────────────────────────────────────────
 
     async def list_entries(
@@ -370,7 +402,11 @@ class AsyncKnowledgeBank:
     async def get_mcp_server_definition(self) -> MCPServerDefinition:
         """Get the MCP server definition for agent injection.
 
-        Returns the MCP URL, server name, and available tools.
+        Returns the MCP URL, server name, and available tools. The
+        ``description`` field is the KB's own description (falling back to its
+        name if unset) — the same text agents receive as
+        ``initialize.instructions``. Change it in place with :meth:`update`.
+
         Use your KB API key as the Bearer token for MCP requests,
         or generate a PAT via :meth:`generate_pat`.
         """

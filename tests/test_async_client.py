@@ -351,6 +351,42 @@ class TestAsyncMCPServerDefinition:
         assert result["token"] == "mcp_token_abc123"
 
 
+class TestAsyncKBUpdateInPlace:
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_update_sets_description_and_refreshes_info(
+        self, client: AsyncGuruCloudClient
+    ) -> None:
+        respx.get(f"{API_PREFIX}/banks/test-kb-uuid").mock(
+            return_value=httpx.Response(200, json={"data": KB_INFO})
+        )
+        updated = {**KB_INFO, "description": "Strict contract: query before triage."}
+        route = respx.patch(f"{API_PREFIX}/banks/test-kb-uuid").mock(
+            return_value=httpx.Response(200, json={"data": updated})
+        )
+
+        kb = await client.get_kb("test-kb-uuid")
+        result = await kb.update(description="Strict contract: query before triage.")
+
+        assert route.called
+        sent = json.loads(route.calls.last.request.content)
+        assert sent == {"description": "Strict contract: query before triage."}
+        assert result["description"] == "Strict contract: query before triage."
+        assert kb.description == "Strict contract: query before triage."
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_update_requires_a_field(
+        self, client: AsyncGuruCloudClient
+    ) -> None:
+        respx.get(f"{API_PREFIX}/banks/test-kb-uuid").mock(
+            return_value=httpx.Response(200, json={"data": KB_INFO})
+        )
+        kb = await client.get_kb("test-kb-uuid")
+        with pytest.raises(ValueError, match="name and/or description"):
+            await kb.update()
+
+
 class TestAsyncDeduplicationEvents:
     @respx.mock
     @pytest.mark.asyncio

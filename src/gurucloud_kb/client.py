@@ -127,10 +127,17 @@ class GuruCloudClient:
     ) -> KBInfo:
         """Update a KB's name and/or description.
 
+        The **description** is the in-place control for every agent-facing surface
+        derived from it: the MCP handshake ``initialize.instructions`` agents
+        receive on connect AND the ``description`` field of
+        :meth:`get_mcp_server_definition`. There is no separate setter — set the
+        description here and both refresh. (You can also call the in-place
+        ``kb.update(...)`` on a :class:`KnowledgeBank`.)
+
         Args:
             kb_id: Knowledge Bank UUID.
             name: New name (optional).
-            description: New description (optional).
+            description: New description (optional). ``""`` clears it.
 
         Returns:
             Updated KB info.
@@ -152,16 +159,24 @@ class GuruCloudClient:
     # ── MCP server definition ───────────────────────────────────
 
     def get_mcp_server_definition(self, kb_id: str) -> MCPServerDefinition:
-        """Get the MCP server definition for a KB, including a PAT.
+        """Get the MCP server definition for a KB, for agent injection.
 
         Convenience method — equivalent to ``client.get_kb(kb_id).get_mcp_server_definition()``,
         but skips the initial GET for KB info.
+
+        The ``description`` field is the KB's own description (falling back to its
+        name if unset) — the same text agents receive as
+        ``initialize.instructions``. Change it in place with
+        :meth:`update_kb`. Authenticate MCP requests with your KB API key as the
+        Bearer token, or mint a never-expiring PAT via ``generate_pat`` /
+        ``generate_pat_for_server``.
 
         Args:
             kb_id: Knowledge Bank UUID.
 
         Returns:
-            Full MCP server definition with token for agent injection.
+            MCP server definition (``server_name``, ``url``, ``description``,
+            ``auth``, ``available_tools``).
         """
         return self._http.post(f"/banks/{kb_id}/mcp-server-definition")
 

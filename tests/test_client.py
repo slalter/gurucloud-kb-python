@@ -408,6 +408,52 @@ class TestMCPServerDefinition:
         assert result["token"] == "mcp_token_abc123"
 
 
+class TestKBUpdateInPlace:
+    @respx.mock
+    def test_update_sets_description_and_refreshes_info(
+        self, client: GuruCloudClient
+    ) -> None:
+        respx.get(f"{API_PREFIX}/banks/test-kb-uuid").mock(
+            return_value=httpx.Response(200, json={"data": KB_INFO})
+        )
+        updated = {**KB_INFO, "description": "Strict contract: query before triage."}
+        route = respx.patch(f"{API_PREFIX}/banks/test-kb-uuid").mock(
+            return_value=httpx.Response(200, json={"data": updated})
+        )
+
+        kb = client.get_kb("test-kb-uuid")
+        result = kb.update(description="Strict contract: query before triage.")
+
+        assert route.called
+        sent = json.loads(route.calls.last.request.content)
+        assert sent == {"description": "Strict contract: query before triage."}
+        assert result["description"] == "Strict contract: query before triage."
+        # cached .info is refreshed from the PATCH response
+        assert kb.description == "Strict contract: query before triage."
+
+    @respx.mock
+    def test_update_sends_only_provided_fields(self, client: GuruCloudClient) -> None:
+        respx.get(f"{API_PREFIX}/banks/test-kb-uuid").mock(
+            return_value=httpx.Response(200, json={"data": KB_INFO})
+        )
+        route = respx.patch(f"{API_PREFIX}/banks/test-kb-uuid").mock(
+            return_value=httpx.Response(200, json={"data": KB_INFO})
+        )
+
+        kb = client.get_kb("test-kb-uuid")
+        kb.update(name="Renamed")
+        assert json.loads(route.calls.last.request.content) == {"name": "Renamed"}
+
+    @respx.mock
+    def test_update_requires_a_field(self, client: GuruCloudClient) -> None:
+        respx.get(f"{API_PREFIX}/banks/test-kb-uuid").mock(
+            return_value=httpx.Response(200, json={"data": KB_INFO})
+        )
+        kb = client.get_kb("test-kb-uuid")
+        with pytest.raises(ValueError, match="name and/or description"):
+            kb.update()
+
+
 class TestDeduplicationEvents:
     @respx.mock
     def test_list_events(self, client: GuruCloudClient) -> None:
