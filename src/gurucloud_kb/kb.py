@@ -295,6 +295,7 @@ class KnowledgeBank:
         include_members: bool = True,
         max_members_per_cluster: int = 10,
         label: bool = False,
+        label_sample_size: int = 5,
     ) -> ClusteringResult:
         """Group the KB's entries by one or more fields.
 
@@ -335,7 +336,12 @@ class KnowledgeBank:
             include_members: include member entries per cluster.
             max_members_per_cluster: cap members returned per cluster.
             label: generate a short label per cluster (LLM when available, else
-                keyword-derived). Off by default — free and deterministic.
+                keyword-derived). Off by default — free and deterministic. When
+                on, ALL clusters of a field are named in a single batched call
+                (fast and mutually distinct), not one call per cluster.
+            label_sample_size: when ``label=True``, how many representative
+                members per cluster feed the labeler — nearest-centroid for
+                vector fields, most distinct values for fuzzy. Default 5.
 
         Returns:
             A :class:`ClusteringResult` with one :class:`FieldClusterResult` per
@@ -352,6 +358,7 @@ class KnowledgeBank:
             "include_members": include_members,
             "max_members_per_cluster": max_members_per_cluster,
             "label": label,
+            "label_sample_size": label_sample_size,
         }
         if k is not None:
             body["k"] = k

@@ -345,7 +345,8 @@ result = kb.cluster(
     method="auto",              # vector for content, fuzzy for metadata.customer
     algorithm="auto",           # vector: HDBSCAN when k omitted, else KMeans
     similarity_threshold=0.85,  # fuzzy cutoff (1.0 = exact grouping)
-    label=False,                # opt-in short label per cluster
+    label=True,                 # opt-in names; all clusters named in ONE batched call
+    label_sample_size=5,        # representatives per cluster fed to the namer
 )
 
 for field_result in result["results"]:
@@ -377,7 +378,8 @@ result = kb.cluster(
 | `search` | `SearchRequest` | Optional — cluster only matching entries. |
 | `scope_limit` | `int` | Max entries clustered when no `search` (default 2000). |
 | `include_members` / `max_members_per_cluster` | `bool` / `int` | Per-cluster member output. |
-| `label` | `bool` | Generate a short label per cluster (off by default — free & deterministic). |
+| `label` | `bool` | Generate a short label per cluster (off by default — free & deterministic). When on, **all** clusters of a field are named in a single batched LLM call (fast, mutually distinct), not one call per cluster. |
+| `label_sample_size` | `int` | When `label=True`, representatives per cluster fed to the namer — nearest-centroid for vector, most-distinct values for fuzzy (default 5). |
 
 Each result is a `FieldClusterResult` with `clusters: [ClusterGroup]`; vector
 results carry a `silhouette_score`, fuzzy results carry each group's `key` and

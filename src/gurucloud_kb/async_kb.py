@@ -295,6 +295,7 @@ class AsyncKnowledgeBank:
         include_members: bool = True,
         max_members_per_cluster: int = 10,
         label: bool = False,
+        label_sample_size: int = 5,
     ) -> ClusteringResult:
         """Group the KB's entries by one or more fields (async).
 
@@ -315,6 +316,7 @@ class AsyncKnowledgeBank:
             "include_members": include_members,
             "max_members_per_cluster": max_members_per_cluster,
             "label": label,
+            "label_sample_size": label_sample_size,
         }
         if k is not None:
             body["k"] = k

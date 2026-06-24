@@ -86,7 +86,27 @@ def test_cluster_sync_defaults_and_omits_k() -> None:
     assert sent["fields"] == ["content"]  # default field
     assert sent["method"] == "auto"
     assert sent["label"] is False
+    assert sent["label_sample_size"] == 5  # default representative cap
     assert "k" not in sent  # None -> omitted so the service auto-selects
+
+
+@respx.mock
+def test_cluster_sync_forwards_label_sample_size() -> None:
+    respx.get(f"{API_PREFIX}/banks/test-kb-uuid").mock(
+        return_value=httpx.Response(200, json={"data": KB_INFO})
+    )
+    kb = GuruCloudClient(api_key=API_KEY, base_url=BASE_URL).get_kb("test-kb-uuid")
+    route = respx.post(f"{API_PREFIX}/banks/test-kb-uuid/cluster").mock(
+        return_value=httpx.Response(
+            200, json={"data": {"scope": {"source": "all", "entry_count": 0}, "results": []}}
+        )
+    )
+
+    kb.cluster(label=True, label_sample_size=3)
+
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["label"] is True
+    assert sent["label_sample_size"] == 3
 
 
 @respx.mock
