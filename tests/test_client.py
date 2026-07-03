@@ -379,7 +379,10 @@ class TestMCPServerDefinition:
             "type": "http",
             "url": "https://test.gurucloudai.com/mcp/srv-uuid/mcp",
             "description": "Test KB",
-            "token": "mcp_token_abc123",
+            "auth": {
+                "type": "bearer",
+                "note": "Use your KB API key (kb_...) as the Bearer token.",
+            },
             "available_tools": ["query_knowledge_bank", "report_learning"],
         }
         respx.post(f"{API_PREFIX}/banks/test-kb-uuid/mcp-server-definition").mock(
@@ -389,8 +392,12 @@ class TestMCPServerDefinition:
         kb = client.get_kb("test-kb-uuid")
         result = kb.get_mcp_server_definition()
         assert result["type"] == "http"
-        assert result["token"] == "mcp_token_abc123"
+        assert result["auth"]["type"] == "bearer"
         assert "query_knowledge_bank" in result["available_tools"]
+        # The endpoint is read-scoped and never returns a token / OAuth fields.
+        assert "token" not in result
+        assert "oauth_discovery_url" not in result
+        assert "oauth_client_id" not in result
 
     @respx.mock
     def test_get_mcp_server_definition_from_client(self, client: GuruCloudClient) -> None:
@@ -398,14 +405,21 @@ class TestMCPServerDefinition:
             "server_name": "test-kb",
             "type": "http",
             "url": "https://test.gurucloudai.com/mcp/srv-uuid/mcp",
-            "token": "mcp_token_abc123",
+            "description": "Test KB",
+            "auth": {
+                "type": "bearer",
+                "note": "Use your KB API key (kb_...) as the Bearer token.",
+            },
+            "available_tools": ["query_knowledge_bank", "report_learning"],
         }
         respx.post(f"{API_PREFIX}/banks/my-kb/mcp-server-definition").mock(
             return_value=httpx.Response(200, json={"data": mcp_def})
         )
 
         result = client.get_mcp_server_definition("my-kb")
-        assert result["token"] == "mcp_token_abc123"
+        assert result["server_name"] == "test-kb"
+        assert result["auth"]["type"] == "bearer"
+        assert "token" not in result
 
 
 class TestKBUpdateInPlace:

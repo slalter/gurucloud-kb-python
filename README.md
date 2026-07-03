@@ -333,34 +333,56 @@ Group a KB's entries by any field. Each field is clustered **independently** and
 returned keyed by field, so one call can group "by topic" and "by customer" at
 once. The engine is chosen per field (`method="auto"`):
 
-- **Embedding dimensions** (`content`, `useful_for`, …) → **vector** clustering
-  (KMeans / Agglomerative / HDBSCAN over the stored vectors).
+- **Single embedding dimensions** (`content`, `observation`, …) → **vector**
+  clustering (KMeans / Agglomerative / HDBSCAN over the stored vectors). When
+  `algorithm="auto"` and no `k` is given, HDBSCAN runs first; if it degenerates
+  (fewer than 3 clusters or >40% noise — common on single-domain KBs) the
+  engine automatically re-runs KMeans with a heuristic k and says so in the
+  field's `note`.
+- **Multi-valued dimensions** (tags, products, accounts, …) → entries are
+  grouped **by their values**; an entry carrying two tags appears in both
+  groups. Near-duplicate values merge per `similarity_threshold`.
 - **Anything else** (`metadata.customer`, `source`, a `text_only` dimension) →
   **fuzzy** string grouping, so near-duplicate values ("Acme Inc" ≈ "Acme,
-  Inc.") merge.
+  Inc.") merge. **Exception:** values that look like codes or IDs
+  (`WHITE12`, `SKU-4471`) are grouped **exactly** and labeled by their dominant
+  value — fuzzy-matching identifiers would merge distinct codes. Pass an
+  explicit `similarity_threshold` to override.
+
+Omit `fields` to cluster the KB's **primary embedding dimension** (its first
+required single dimension) — the right default for custom-schema KBs, whose
+`content` column has no embedding.
 
 ```python
 result = kb.cluster(
-    fields=["content", "metadata.customer"],
-    method="auto",              # vector for content, fuzzy for metadata.customer
-    algorithm="auto",           # vector: HDBSCAN when k omitted, else KMeans
+    fields=["observation", "themes", "metadata.customer_no"],
+    method="auto",              # vector / value-grouping / fuzzy per field
+    algorithm="auto",           # vector: HDBSCAN, KMeans fallback on collapse
     similarity_threshold=0.85,  # fuzzy cutoff (1.0 = exact grouping)
-    label=True,                 # opt-in names; all clusters named in ONE batched call
+    label=True,                 # opt-in names; one batched LLM call per field
     label_sample_size=5,        # representatives per cluster fed to the namer
 )
 
 for field_result in result["results"]:
     print(field_result["field"], field_result["method"], field_result["cluster_count"])
+    if field_result.get("note"):
+        print("  note:", field_result["note"])   # engine advisories land here
     for group in field_result["clusters"]:
-        print("  ", group.get("key") or group.get("keywords"), "→", group["size"])
+        print("  ", group.get("label") or group.get("key"), "→", group["size"])
 ```
+
+Labeling: the **30 largest** clusters of a field are named in a single batched
+LLM call; smaller clusters fall back to their dominant value (fuzzy) or keyword
+terms (vector). The tokens spent are reported per field in
+`field_result["label_usage"]` (`model`, `input_tokens`, `output_tokens`) so
+labeling cost is always visible. ID-like fields skip the LLM entirely.
 
 Cluster only the results of a search by passing the same shape as `kb.search`:
 
 ```python
 result = kb.cluster(
-    fields=["content"],
-    search={"dimensions": {"content": {"query_text": "billing error"}}, "k": 500},
+    fields=["observation"],
+    search={"dimensions": {"observation": {"query_text": "billing error"}}, "k": 500},
 )
 ```
 
@@ -368,22 +390,68 @@ result = kb.cluster(
 
 | Field | Type | Notes |
 |---|---|---|
-| `fields` | `[str]` | Fields to cluster (default `["content"]`). `metadata.<key>` reads a metadata value; a bare name resolves to a dimension or metadata key. |
-| `method` | `auto` \| `vector` \| `fuzzy` | `auto` picks by field type (single embedding dim → vector, else fuzzy). |
-| `algorithm` | `auto` \| `kmeans` \| `agglomerative` \| `hdbscan` | Vector only. `kmeans`/`agglomerative` require `k`. |
+| `fields` | `[str]` | Fields to cluster. Omit → the KB's primary embedding dimension. `metadata.<key>` reads a metadata value; a bare name resolves to a dimension or metadata key. |
+| `method` | `auto` \| `vector` \| `fuzzy` | `auto` picks by field type (single embedding dim → vector, multi dim → value grouping, else fuzzy). `vector` on a non-embedding or multi field is a 400. |
+| `algorithm` | `auto` \| `kmeans` \| `agglomerative` \| `hdbscan` | Vector only. `kmeans`/`agglomerative` require `k`. `auto` without `k` = HDBSCAN with automatic KMeans fallback on degenerate results; explicit `hdbscan` never falls back. |
 | `k` | `int` | Cluster count for kmeans/agglomerative. Omit for `auto`/`hdbscan`. |
-| `min_cluster_size` | `int` | HDBSCAN minimum cluster size (default 5). |
+| `min_cluster_size` | `int` | HDBSCAN minimum cluster size (default 5). Low values fragment single-domain KBs into many tiny clusters. |
 | `metric` | `cosine` \| `euclidean` | Vector distance (default `cosine`). |
-| `similarity_threshold` | `float` | Fuzzy cutoff 0..1 (default 0.85; `1.0` = exact). |
+| `similarity_threshold` | `float` | Fuzzy cutoff 0..1 (default 0.85; `1.0` = exact). ID-like values force exact grouping unless you pass this explicitly. |
 | `search` | `SearchRequest` | Optional — cluster only matching entries. |
 | `scope_limit` | `int` | Max entries clustered when no `search` (default 2000). |
 | `include_members` / `max_members_per_cluster` | `bool` / `int` | Per-cluster member output. |
-| `label` | `bool` | Generate a short label per cluster (off by default — free & deterministic). When on, **all** clusters of a field are named in a single batched LLM call (fast, mutually distinct), not one call per cluster. |
+| `label` | `bool` | Generate a short label per cluster (off by default — free & deterministic). When on, the 30 largest clusters of a field are named in ONE batched LLM call; the tail gets dominant-value/keyword labels. |
 | `label_sample_size` | `int` | When `label=True`, representatives per cluster fed to the namer — nearest-centroid for vector, most-distinct values for fuzzy (default 5). |
 
-Each result is a `FieldClusterResult` with `clusters: [ClusterGroup]`; vector
-results carry a `silhouette_score`, fuzzy results carry each group's `key` and
+Each result is a `FieldClusterResult` with `clusters: [ClusterGroup]`, plus:
+`note` (engine advisories: algorithm fallback, exact ID grouping, un-embedded
+field warnings), `label_usage` (LLM token accounting when labeling ran),
+`silhouette_score` (vector), and each fuzzy group's `key` (dominant value) and
 distinct `values`.
+
+---
+
+## Retrieval assertions (search-quality regression tests)
+
+Pin queries that MUST retrieve a given entry, then re-check them any time —
+your KB's retrieval quality becomes testable instead of vibes:
+
+```python
+# "This query should find this entry" — baseline rank/score captured now.
+kb.add_assertion(entry_id=entry["id"], query="how do we handle refunds?",
+                 notes="core support flow")
+
+kb.list_assertions()                  # all assertions + their baselines
+report = kb.run_retrieval_eval()      # re-run every assertion against live search
+# → per-assertion current rank/score vs baseline, pass/fail, regressions
+
+kb.get_assertion(assertion_id)        # one assertion's detail
+kb.delete_assertion(assertion_id)     # retire it
+```
+
+`query` accepts a plain string (searches the primary dimension) or the same
+per-dimension shape as `kb.search`. Run the eval after schema changes, bulk
+ingests, or dedup sweeps to catch retrieval regressions. Requires `write`
+scope to create/delete; `read` to list and evaluate.
+
+---
+
+## Manage KBs and API keys (client scope)
+
+```python
+client.list_kbs()                     # every KB your key can reach → [KBInfo]
+kb = client.get_kb("kb-uuid")         # bind a handle (fetches info)
+client.update_kb("kb-uuid", name="Support KB", description="...")
+client.delete_kb("kb-uuid")           # admin scope — irreversible
+
+# API keys (admin scope): mint scoped keys for services / teammates.
+key = client.create_api_key(name="reporting-bot", scopes=["read"])
+client.list_api_keys()
+client.delete_api_key(key["id"])
+
+client.get_mcp_server_definition("kb-uuid")   # same payload as kb.get_mcp_server_definition()
+client.close()                        # or use `with GuruCloudClient(...) as client:`
+```
 
 ---
 
@@ -443,6 +511,44 @@ from gurucloud_kb import (
 ---
 
 ## Changelog
+
+### 0.1.9
+
+- **`kb.cluster()` / `await kb.cluster()` omit `fields` when not given** — the
+  server now picks the KB's primary embedding dimension (first required SINGLE
+  dimension), so custom-schema KBs no longer degrade to fuzzy grouping over a
+  raw `content` column that has no embedding. Server-side improvements shipped
+  alongside: MULTI dimensions (tags, products, ...) are now clusterable (entries
+  grouped by their values), degenerate auto-HDBSCAN results fall back to KMeans
+  with a heuristic k, ID-like values are grouped exactly with dominant-value
+  labels, and each field result carries an optional `note` plus `label_usage`
+  token accounting.
+
+### 0.1.8
+
+- **Removed `DimensionConfig.show_in_results`** — the deprecated, inert
+  per-dimension flag (deprecated in 0.1.3) has been removed. It never controlled
+  MCP output; use `response_fields` (`mcp_response_fields`) to choose the keys
+  the MCP tools return. Stored schemas that still carry the key keep parsing —
+  the unknown field is ignored.
+
+### 0.1.7
+
+- **`label_sample_size` on `kb.cluster()` / `await kb.cluster()`** — when
+  `label=True`, how many representative entries per cluster are sent to the
+  labeler (default 5). Server-side, cluster naming became one batched LLM call
+  per field instead of one call per cluster, so labeled clustering no longer
+  slows linearly with cluster count and names come out mutually distinct.
+
+### 0.1.6
+
+- **`kb.update()` / `await kb.update()`** — update a KB's name and/or
+  description in place (`write` scope; also `client.update_kb(kb_id, ...)`).
+  The description drives both the agent-facing `initialize.instructions` and
+  the `description` returned by `get_mcp_server_definition()` (see *Update the
+  name / description* above) — there is no separate setter for those surfaces.
+- Corrected stale docstrings that claimed KB-management methods "return a
+  token".
 
 ### 0.1.5
 

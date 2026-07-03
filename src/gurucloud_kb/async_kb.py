@@ -306,7 +306,6 @@ class AsyncKnowledgeBank:
         are clustered.
         """
         body: dict[str, Any] = {
-            "fields": list(fields) if fields is not None else ["content"],
             "method": method,
             "algorithm": algorithm,
             "min_cluster_size": min_cluster_size,
@@ -318,6 +317,8 @@ class AsyncKnowledgeBank:
             "label": label,
             "label_sample_size": label_sample_size,
         }
+        if fields is not None:
+            body["fields"] = list(fields)
         if k is not None:
             body["k"] = k
         if search is not None:

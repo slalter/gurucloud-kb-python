@@ -321,7 +321,10 @@ class KnowledgeBank:
                       len(field_result["clusters"]))
 
         Args:
-            fields: Fields to cluster on (default ``["content"]``).
+            fields: Fields to cluster on. Omit to let the server cluster the
+                KB's primary embedding dimension (its first required SINGLE
+                dimension, else its first SINGLE dimension). A MULTI dimension
+                (tags, products, ...) groups entries by its values.
             method: ``"auto"`` | ``"vector"`` | ``"fuzzy"``.
             algorithm: vector algorithm — ``"auto"`` (HDBSCAN when ``k`` is
                 omitted, else KMeans) | ``"kmeans"`` | ``"agglomerative"`` |
@@ -347,8 +350,11 @@ class KnowledgeBank:
             A :class:`ClusteringResult` with one :class:`FieldClusterResult` per
             field in ``results``.
         """
+        # Omit "fields" when not given: the server picks the KB's primary
+        # embedding dimension, which is schema-aware (custom-schema KBs have
+        # no embedded "content" field, so a hardcoded default degrades to
+        # meaningless fuzzy grouping over free text).
         body: dict[str, Any] = {
-            "fields": list(fields) if fields is not None else ["content"],
             "method": method,
             "algorithm": algorithm,
             "min_cluster_size": min_cluster_size,
@@ -360,6 +366,8 @@ class KnowledgeBank:
             "label": label,
             "label_sample_size": label_sample_size,
         }
+        if fields is not None:
+            body["fields"] = list(fields)
         if k is not None:
             body["k"] = k
         if search is not None:

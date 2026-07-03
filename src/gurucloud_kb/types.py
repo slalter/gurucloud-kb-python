@@ -82,12 +82,6 @@ class DimensionConfig(TypedDict, total=False):
     top_k: int
     max_items: int
     searchable: bool
-    show_in_results: bool
-    """DEPRECATED / not enforced. This per-dimension flag does NOT control what
-    the MCP tools (``query_knowledge_bank``, ``narrate``) return — nothing reads
-    it. Choose the returned keys per-KB with :attr:`DimensionSchema.mcp_response_fields`
-    (``id`` + ``content`` are always returned). Kept only for backward
-    compatibility of stored schemas."""
 
 
 class CategoryConfig(TypedDict, total=False):
@@ -304,8 +298,26 @@ class ClusteringResult(TypedDict, total=False):
 # ── MCP Server Definition ──────────────────────────────────────
 
 
+class MCPServerAuth(TypedDict, total=False):
+    """How to authenticate against a KB's MCP server.
+
+    The definition is read-scoped: it never mints or returns a token. Use your
+    KB API key (``kb_...``) as the Bearer token, or mint a never-expiring PAT
+    via ``generate_pat`` / ``generate_pat_for_server``.
+    """
+
+    type: str  # always "bearer"
+    note: str
+
+
 class MCPServerDefinition(TypedDict, total=False):
-    """Everything needed to inject a KB's MCP server into an agent."""
+    """Everything needed to inject a KB's MCP server into an agent.
+
+    Returned by ``get_mcp_server_definition``. This is read-scoped *connection
+    metadata only* — it deliberately does NOT contain a ``token`` (or any OAuth
+    discovery fields); PAT minting moved to the separate admin-scoped
+    ``generate_pat`` endpoint. Authenticate via :attr:`auth`.
+    """
 
     server_name: str
     type: str  # always "http"
@@ -315,9 +327,7 @@ class MCPServerDefinition(TypedDict, total=False):
     text agents receive at the MCP handshake as ``initialize.instructions``. Set
     it in place via ``client.update_kb(kb_id, description=...)`` or
     ``kb.update(description=...)``."""
-    token: str
-    oauth_discovery_url: str
-    oauth_client_id: str
+    auth: MCPServerAuth
     available_tools: list[str]
 
 

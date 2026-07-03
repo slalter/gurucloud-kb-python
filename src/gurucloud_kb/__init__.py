@@ -56,6 +56,7 @@ from gurucloud_kb.types import (
     EntryInput,
     EntryResult,
     KBInfo,
+    MCPServerAuth,
     MCPServerDefinition,
     SchemaWarning,
     SearchRequest,
@@ -92,6 +93,7 @@ __all__ = [
     "DimensionQuery",
     "SearchRequest",
     "SearchResult",
+    "MCPServerAuth",
     "MCPServerDefinition",
     "APIKeyInfo",
     "BatchIngestResult",
@@ -109,4 +111,4 @@ __all__ = [
     "EntryEventLogList",
 ]
 
-__version__ = "0.1.7"
+__version__ = "0.1.8"

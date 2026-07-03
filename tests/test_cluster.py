@@ -83,7 +83,9 @@ def test_cluster_sync_defaults_and_omits_k() -> None:
     kb.cluster()
 
     sent = json.loads(route.calls[0].request.content)
-    assert sent["fields"] == ["content"]  # default field
+    # No fields sent -> the server picks the KB's primary embedding dimension
+    # (schema-aware; a hardcoded "content" is wrong for custom-schema KBs).
+    assert "fields" not in sent
     assert sent["method"] == "auto"
     assert sent["label"] is False
     assert sent["label_sample_size"] == 5  # default representative cap
