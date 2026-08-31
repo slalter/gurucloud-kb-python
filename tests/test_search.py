@@ -122,3 +122,35 @@ def test_normalize_passes_string_time_bounds_through() -> None:
     )
     assert out["created_after"] == "2026-05-01T00:00:00Z"
     assert out["updated_before"] == "2026-06-01"
+
+
+# ── event-time (event_at) filtering ─────────────────────────────
+
+
+def test_build_string_search_omits_event_bounds_by_default() -> None:
+    req = build_string_search("x", k=5, threshold=0.3)
+    assert "event_after" not in req
+    assert "event_before" not in req
+
+
+def test_build_string_search_serializes_event_datetime_bound() -> None:
+    dt = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    req = build_string_search("x", k=5, threshold=0.3, event_after=dt)
+    assert req["event_after"] == dt.isoformat()
+
+
+def test_build_string_search_passes_event_string_bounds_through() -> None:
+    req = build_string_search(
+        "x", k=5, threshold=0.3,
+        event_after="2026-01-01", event_before="2026-04-01",
+    )
+    assert req["event_after"] == "2026-01-01"
+    assert req["event_before"] == "2026-04-01"
+
+
+def test_normalize_serializes_datetime_event_bounds() -> None:
+    dt = datetime(2026, 1, 1, 8, 0, tzinfo=timezone.utc)
+    out = normalize_search_request(
+        {"dimensions": {"content": {"query_text": "x"}}, "event_after": dt}
+    )
+    assert out["event_after"] == dt.isoformat()

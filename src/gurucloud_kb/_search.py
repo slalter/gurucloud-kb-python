@@ -24,11 +24,15 @@ from datetime import datetime
 from typing import Any, Optional, Union
 
 # Top-level hard-filter keys for the time window (entry timestamps, UTC).
+# created_/updated_ target the ingest/modify time; event_ targets the
+# caller-supplied event_at (when the event/observation occurred).
 TIME_FILTER_KEYS = (
     "created_after",
     "created_before",
     "updated_after",
     "updated_before",
+    "event_after",
+    "event_before",
 )
 
 # A time bound may be given as an ISO-8601 string or a datetime.
@@ -51,12 +55,15 @@ def build_string_search(
     created_before: Optional[DateInput] = None,
     updated_after: Optional[DateInput] = None,
     updated_before: Optional[DateInput] = None,
+    event_after: Optional[DateInput] = None,
+    event_before: Optional[DateInput] = None,
 ) -> dict[str, Any]:
     """Build a request body for a simple single-string query.
 
     Searches the ``content`` dimension, which is present in every default
     Knowledge Bank. Any supplied time bound adds a hard filter on entry
-    timestamps; ``datetime`` values are serialized to ISO-8601.
+    timestamps; ``datetime`` values are serialized to ISO-8601. ``event_*``
+    bounds filter on the caller-supplied ``event_at`` instead of ingest time.
     """
     req: dict[str, Any] = {
         "dimensions": {"content": {"query_text": query, "weight": 1.0}},
@@ -68,6 +75,8 @@ def build_string_search(
         "created_before": created_before,
         "updated_after": updated_after,
         "updated_before": updated_before,
+        "event_after": event_after,
+        "event_before": event_before,
     }
     for key, val in bounds.items():
         iso = _iso(val)

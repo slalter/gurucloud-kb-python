@@ -202,7 +202,9 @@ class KnowledgeBank:
             deduplicate: Whether to deduplicate against existing entries.
 
         Returns:
-            Summary with counts of ingested/errored entries.
+            Summary with counts of ingested/errored entries, plus
+            ``entry_ids`` — the created id per input position (``None``
+            where that index errored; absent on older servers).
         """
         return self._http.post(
             self._path("/entries/batch"),
@@ -221,6 +223,8 @@ class KnowledgeBank:
         created_before: str | datetime | None = None,
         updated_after: str | datetime | None = None,
         updated_before: str | datetime | None = None,
+        event_after: str | datetime | None = None,
+        event_before: str | datetime | None = None,
     ) -> list[SearchResult]:
         """Semantic search across the KB.
 
@@ -259,6 +263,9 @@ class KnowledgeBank:
                 Accepts an ISO-8601 string or a ``datetime``. Applied to string
                 queries; for a dict query set the same keys inside it. Removes
                 out-of-window entries without affecting the ranking.
+            event_after, event_before:
+                Like the above, but filter on the caller-supplied ``event_at``
+                (when the event/observation occurred) instead of ingest time.
 
         Returns:
             List of matching entries with per-dimension and combined scores.
@@ -272,6 +279,8 @@ class KnowledgeBank:
                 created_before=created_before,
                 updated_after=updated_after,
                 updated_before=updated_before,
+                event_after=event_after,
+                event_before=event_before,
             )
         else:
             request = normalize_search_request(query)
@@ -288,6 +297,8 @@ class KnowledgeBank:
         algorithm: ClusterAlgorithm = "auto",
         k: int | None = None,
         min_cluster_size: int = 5,
+        max_cluster_size: int | None = None,
+        max_cluster_fraction: float | None = None,
         metric: str = "cosine",
         similarity_threshold: float = 0.85,
         search: SearchRequest | None = None,
@@ -331,6 +342,16 @@ class KnowledgeBank:
                 ``"hdbscan"``.
             k: cluster count (required for kmeans/agglomerative).
             min_cluster_size: HDBSCAN minimum cluster size.
+            max_cluster_size: maximum entries per cluster (absolute).
+                Oversized vector clusters are recursively split server-side
+                until every cluster fits; oversized fuzzy groups are split
+                into exact-value groups (a single value repeated more than
+                the cap cannot be split and is noted). Not applied to
+                multi-valued dimension groups.
+            max_cluster_fraction: maximum entries per cluster as a fraction
+                (0..1] of the entries being clustered — e.g. ``0.25`` means no
+                cluster may hold more than a quarter of the scope. When both
+                caps are given, the stricter one wins.
             metric: ``"cosine"`` or ``"euclidean"`` (vector).
             similarity_threshold: fuzzy match cutoff 0..1 (1.0 = exact).
             search: optional :class:`SearchRequest` to scope which entries are
@@ -370,6 +391,10 @@ class KnowledgeBank:
             body["fields"] = list(fields)
         if k is not None:
             body["k"] = k
+        if max_cluster_size is not None:
+            body["max_cluster_size"] = max_cluster_size
+        if max_cluster_fraction is not None:
+            body["max_cluster_fraction"] = max_cluster_fraction
         if search is not None:
             body["search"] = normalize_search_request(search)
         return self._http.post(self._path("/cluster"), json=body)

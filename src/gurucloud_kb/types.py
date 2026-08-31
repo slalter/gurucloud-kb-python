@@ -6,7 +6,7 @@ All types use TypedDict for zero-dependency, static-typing-friendly contracts.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, Optional, TypedDict
 
 
 # ── Enumerated value types (self-documenting) ───────────────────
@@ -138,6 +138,12 @@ class EntryInput(TypedDict, total=False):
     metadata: dict[str, Any]
     source: str
     relevant_file_paths: list[str]
+    event_at: str
+    """When the underlying event/observation occurred (e.g. an email's sent
+    date), as an ISO-8601 UTC string — distinct from the ingest timestamp.
+    Enables event-time range filtering via ``event_after`` / ``event_before``
+    at search time. Stored as naive UTC server-side; ``created_at`` remains the
+    honest ingest time."""
 
 
 class EntryResult(TypedDict, total=False):
@@ -149,11 +155,16 @@ class EntryResult(TypedDict, total=False):
     relevant_systems: list[str]
     relevant_tasks: list[str]
     relevant_file_paths: list[str]
+    # Values of every non-default embedded dimension in the KB's schema,
+    # keyed by dimension name (SINGLE → str, MULTI → list[str]). Empty for
+    # default-schema KBs; TEXT_ONLY dimension values live in ``metadata``.
+    dimensions: dict[str, str | list[str]]
     metadata: dict[str, Any]
     source: str
     combined_score: float
     created_at: str
     updated_at: str
+    event_at: str  # caller-supplied event time (ISO-8601), null when unset
 
 
 # Search results have the same shape as entries (with scores populated)
@@ -200,8 +211,11 @@ class SearchRequest(TypedDict, total=False):
 
     The ``created_after`` / ``created_before`` / ``updated_after`` /
     ``updated_before`` keys add a **hard time-window filter** on entry
-    timestamps (UTC). Accepts an ISO-8601 string or a ``datetime`` (serialized
-    for you). It removes out-of-window rows without affecting the ranking.
+    timestamps (UTC). ``event_after`` / ``event_before`` filter on the
+    caller-supplied ``event_at`` (when the event/observation occurred) instead
+    of the ingest time. Each accepts an ISO-8601 string or a ``datetime``
+    (serialized for you) and removes out-of-window rows without affecting the
+    ranking.
 
     Example::
 
@@ -229,6 +243,8 @@ class SearchRequest(TypedDict, total=False):
     created_before: str | datetime
     updated_after: str | datetime
     updated_before: str | datetime
+    event_after: str | datetime
+    event_before: str | datetime
 
 
 # ── Clustering ──────────────────────────────────────────────────
@@ -354,10 +370,16 @@ class APIKeyInfo(TypedDict, total=False):
 
 
 class BatchIngestResult(TypedDict, total=False):
-    """Result of a batch entry ingestion."""
+    """Result of a batch entry ingestion.
+
+    ``entry_ids`` is positional: one created entry id per input entry, with
+    ``None`` at indexes whose entry errored. Servers older than the
+    entry-id-returning API omit the key entirely.
+    """
 
     ingested: int
     errors: list[dict[str, Any]]
+    entry_ids: list[Optional[str]]
 
 
 # ── Deduplication Events ───────────────────────────────────────

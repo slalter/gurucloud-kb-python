@@ -157,3 +157,47 @@ async def test_cluster_async_multi_field() -> None:
     assert result["scope"]["entry_count"] == 5
     sent = json.loads(route.calls[0].request.content)
     assert sent["fields"] == ["content", "metadata.customer"]
+
+@respx.mock
+def test_cluster_sync_forwards_size_caps_and_omits_when_unset() -> None:
+    respx.get(f"{API_PREFIX}/banks/test-kb-uuid").mock(
+        return_value=httpx.Response(200, json={"data": KB_INFO})
+    )
+    kb = GuruCloudClient(api_key=API_KEY, base_url=BASE_URL).get_kb("test-kb-uuid")
+    route = respx.post(f"{API_PREFIX}/banks/test-kb-uuid/cluster").mock(
+        return_value=httpx.Response(
+            200, json={"data": {"scope": {"source": "all", "entry_count": 0}, "results": []}}
+        )
+    )
+
+    kb.cluster(max_cluster_size=50, max_cluster_fraction=0.25)
+    kb.cluster()
+
+    capped = json.loads(route.calls[0].request.content)
+    assert capped["max_cluster_size"] == 50
+    assert capped["max_cluster_fraction"] == 0.25
+    uncapped = json.loads(route.calls[1].request.content)
+    assert "max_cluster_size" not in uncapped
+    assert "max_cluster_fraction" not in uncapped
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_cluster_async_forwards_size_caps() -> None:
+    respx.get(f"{API_PREFIX}/banks/test-kb-uuid").mock(
+        return_value=httpx.Response(200, json={"data": KB_INFO})
+    )
+    client = AsyncGuruCloudClient(api_key=API_KEY, base_url=BASE_URL)
+    kb = await client.get_kb("test-kb-uuid")
+    route = respx.post(f"{API_PREFIX}/banks/test-kb-uuid/cluster").mock(
+        return_value=httpx.Response(
+            200, json={"data": {"scope": {"source": "all", "entry_count": 0}, "results": []}}
+        )
+    )
+
+    await kb.cluster(max_cluster_size=10, max_cluster_fraction=0.1)
+    await client.close()
+
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["max_cluster_size"] == 10
+    assert sent["max_cluster_fraction"] == 0.1

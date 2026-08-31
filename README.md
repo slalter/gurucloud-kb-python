@@ -377,6 +377,25 @@ terms (vector). The tokens spent are reported per field in
 `field_result["label_usage"]` (`model`, `input_tokens`, `output_tokens`) so
 labeling cost is always visible. ID-like fields skip the LLM entirely.
 
+Cap how large any one cluster may grow with `max_cluster_size` (absolute entry
+count) and/or `max_cluster_fraction` (share of the clustered scope, `0..1]`) —
+when both are given the stricter cap wins. Oversized vector clusters are
+recursively split server-side (KMeans within the cluster) until every cluster
+fits; oversized fuzzy groups split into exact-value groups (a single value
+repeated past the cap cannot be split — the field's `note` says so); groups of
+a multi-valued dimension are never split, since their size is the value's usage
+count. Fields in one call are clustered **concurrently** server-side, so one
+three-field request beats three single-field requests on wall-clock.
+
+```python
+result = kb.cluster(
+    fields=["observation"],
+    algorithm="kmeans", k=8,
+    max_cluster_size=50,        # no cluster larger than 50 entries…
+    max_cluster_fraction=0.2,   # …or 20% of the scope, whichever is stricter
+)
+```
+
 Cluster only the results of a search by passing the same shape as `kb.search`:
 
 ```python
@@ -511,6 +530,16 @@ from gurucloud_kb import (
 ---
 
 ## Changelog
+
+### 0.1.10
+
+- **Entry reads now carry custom dimension values and timestamps** — the API's
+  `list_entries()`, `get_entry()`, and `search()` results include a
+  `dimensions` object with every non-default embedded dimension's value(s)
+  (SINGLE → str, MULTI → list[str]; empty `{}` on default-schema KBs), and
+  `created_at` / `updated_at` are populated on list/get responses (previously
+  null). `EntryResult` documents the new key. No client behavior change —
+  typing/docs only; requires the 2026-07-03 server deploy or later.
 
 ### 0.1.9
 

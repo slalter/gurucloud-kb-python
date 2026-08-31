@@ -202,7 +202,9 @@ class AsyncKnowledgeBank:
             deduplicate: Whether to deduplicate against existing entries.
 
         Returns:
-            Summary with counts of ingested/errored entries.
+            Summary with counts of ingested/errored entries, plus
+            ``entry_ids`` — the created id per input position (``None``
+            where that index errored; absent on older servers).
         """
         return await self._http.post(
             self._path("/entries/batch"),
@@ -221,6 +223,8 @@ class AsyncKnowledgeBank:
         created_before: str | datetime | None = None,
         updated_after: str | datetime | None = None,
         updated_before: str | datetime | None = None,
+        event_after: str | datetime | None = None,
+        event_before: str | datetime | None = None,
     ) -> list[SearchResult]:
         """Semantic search across the KB.
 
@@ -259,6 +263,9 @@ class AsyncKnowledgeBank:
                 Accepts an ISO-8601 string or a ``datetime``. Applied to string
                 queries; for a dict query set the same keys inside it. Removes
                 out-of-window entries without affecting the ranking.
+            event_after, event_before:
+                Like the above, but filter on the caller-supplied ``event_at``
+                (when the event/observation occurred) instead of ingest time.
 
         Returns:
             List of matching entries with per-dimension and combined scores.
@@ -272,6 +279,8 @@ class AsyncKnowledgeBank:
                 created_before=created_before,
                 updated_after=updated_after,
                 updated_before=updated_before,
+                event_after=event_after,
+                event_before=event_before,
             )
         else:
             request = normalize_search_request(query)
@@ -288,6 +297,8 @@ class AsyncKnowledgeBank:
         algorithm: ClusterAlgorithm = "auto",
         k: int | None = None,
         min_cluster_size: int = 5,
+        max_cluster_size: int | None = None,
+        max_cluster_fraction: float | None = None,
         metric: str = "cosine",
         similarity_threshold: float = 0.85,
         search: SearchRequest | None = None,
@@ -303,7 +314,10 @@ class AsyncKnowledgeBank:
         each field is grouped independently — embedding dimensions by vector
         similarity, other fields (metadata keys, ``source``, ``text_only``
         dimensions) by fuzzy string match — and ``search`` scopes which entries
-        are clustered.
+        are clustered. ``max_cluster_size`` / ``max_cluster_fraction`` cap how
+        many entries any one cluster may hold (absolute count / share of the
+        scope; the stricter wins) — oversized vector clusters are recursively
+        split server-side.
         """
         body: dict[str, Any] = {
             "method": method,
@@ -321,6 +335,10 @@ class AsyncKnowledgeBank:
             body["fields"] = list(fields)
         if k is not None:
             body["k"] = k
+        if max_cluster_size is not None:
+            body["max_cluster_size"] = max_cluster_size
+        if max_cluster_fraction is not None:
+            body["max_cluster_fraction"] = max_cluster_fraction
         if search is not None:
             body["search"] = normalize_search_request(search)
         return await self._http.post(self._path("/cluster"), json=body)
