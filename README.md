@@ -396,6 +396,22 @@ result = kb.cluster(
 )
 ```
 
+Outliers (HDBSCAN noise) don't have to stay a catch-all. `outlier_strategy`
+controls what happens to them on vector fields: `"keep"` (default) leaves them
+uncategorized; `"reassign"` absorbs each noise entry into its nearest cluster
+when it lies within that cluster's own spread; `"subcluster"` re-clusters the
+noise into new clusters flagged `from_noise` so nothing is left uncategorized.
+Every vector cluster also reports `mean_member_distance` and a `low_cohesion`
+flag marking clusters whose spread is an outlier vs their peers — likely
+catch-alls worth a follow-up `subcluster` pass.
+
+```python
+result = kb.cluster(fields=["observation"], outlier_strategy="subcluster")
+for group in result["results"][0]["clusters"]:
+    if group.get("from_noise") or group.get("low_cohesion"):
+        print("refined:", group["size"], group.get("keywords"))
+```
+
 Cluster only the results of a search by passing the same shape as `kb.search`:
 
 ```python
@@ -530,6 +546,35 @@ from gurucloud_kb import (
 ---
 
 ## Changelog
+
+### 0.1.13
+
+- **Outlier refinement** — `cluster()` (sync + async) accepts
+  `outlier_strategy` (`"keep"` | `"reassign"` | `"subcluster"`) so vector
+  noise can be absorbed into nearby clusters or re-clustered into its own
+  `from_noise` clusters instead of staying a catch-all. Vector clusters also
+  report `mean_member_distance` and a `low_cohesion` flag marking likely
+  catch-all clusters. Requires the 2026-09-01 server deploy; the parameter is
+  omitted from the request at its default, so older servers keep working.
+
+### 0.1.12
+
+- **Cluster-size caps** — `cluster()` (sync + async) accepts
+  `max_cluster_size` (absolute entries per cluster) and
+  `max_cluster_fraction` (share of the clustered scope, `0..1]`; stricter
+  wins). Oversized vector clusters are recursively split server-side so the
+  caps always hold; fuzzy groups split into exact-value groups; multi-valued
+  dimension groups are exempt (noted). Requires the 2026-08-31 server deploy.
+- Multiple `fields` in one `cluster()` call are now clustered concurrently
+  server-side — one three-field request beats three single-field requests.
+- `__version__` re-synced with `pyproject.toml` (had been stuck at 0.1.8).
+
+### 0.1.11
+
+- **Batch ingest returns created entry ids** — `ingest()` responses carry
+  `entry_ids`: one created id per input position (`None` for rows that
+  errored), so callers can map inputs to created entries. Typing/docs only on
+  the client; requires the 2026-08-24 server deploy (PR #3402).
 
 ### 0.1.10
 

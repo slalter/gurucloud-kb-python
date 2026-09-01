@@ -12,6 +12,7 @@ from gurucloud_kb.types import (
     ClusterAlgorithm,
     ClusteringResult,
     ClusterMethod,
+    ClusterOutlierStrategy,
     DeduplicationEvent,
     DeduplicationEventList,
     DimensionConfig,
@@ -299,6 +300,7 @@ class KnowledgeBank:
         min_cluster_size: int = 5,
         max_cluster_size: int | None = None,
         max_cluster_fraction: float | None = None,
+        outlier_strategy: ClusterOutlierStrategy = "keep",
         metric: str = "cosine",
         similarity_threshold: float = 0.85,
         search: SearchRequest | None = None,
@@ -352,6 +354,14 @@ class KnowledgeBank:
                 (0..1] of the entries being clustered — e.g. ``0.25`` means no
                 cluster may hold more than a quarter of the scope. When both
                 caps are given, the stricter one wins.
+            outlier_strategy: what to do with outlier/noise entries after
+                vector clustering. ``"keep"`` (default) leaves them
+                uncategorized; ``"reassign"`` absorbs each into its nearest
+                cluster when it lies within that cluster's own spread;
+                ``"subcluster"`` re-clusters the noise into new clusters
+                flagged ``from_noise`` so no catch-all bucket remains. Vector
+                fields only. Clusters whose spread is an outlier vs their
+                peers come back flagged ``low_cohesion`` either way.
             metric: ``"cosine"`` or ``"euclidean"`` (vector).
             similarity_threshold: fuzzy match cutoff 0..1 (1.0 = exact).
             search: optional :class:`SearchRequest` to scope which entries are
@@ -395,6 +405,9 @@ class KnowledgeBank:
             body["max_cluster_size"] = max_cluster_size
         if max_cluster_fraction is not None:
             body["max_cluster_fraction"] = max_cluster_fraction
+        if outlier_strategy != "keep":
+            # Omitted when default so older servers stay compatible.
+            body["outlier_strategy"] = outlier_strategy
         if search is not None:
             body["search"] = normalize_search_request(search)
         return self._http.post(self._path("/cluster"), json=body)

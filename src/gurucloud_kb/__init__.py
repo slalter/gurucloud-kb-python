@@ -40,6 +40,7 @@ from gurucloud_kb.types import (
     ClusteringResult,
     ClusterMember,
     ClusterMethod,
+    ClusterOutlierStrategy,
     ClusterScope,
     FieldClusterResult,
     CategoryFilter,
@@ -99,6 +100,7 @@ __all__ = [
     "BatchIngestResult",
     "ClusterMethod",
     "ClusterAlgorithm",
+    "ClusterOutlierStrategy",
     "ClusterMember",
     "ClusterGroup",
     "FieldClusterResult",
@@ -111,4 +113,4 @@ __all__ = [
     "EntryEventLogList",
 ]
 
-__version__ = "0.1.12"
+__version__ = "0.1.13"

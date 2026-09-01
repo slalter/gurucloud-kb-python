@@ -12,6 +12,7 @@ from gurucloud_kb.types import (
     ClusterAlgorithm,
     ClusteringResult,
     ClusterMethod,
+    ClusterOutlierStrategy,
     DeduplicationEvent,
     DeduplicationEventList,
     DimensionConfig,
@@ -299,6 +300,7 @@ class AsyncKnowledgeBank:
         min_cluster_size: int = 5,
         max_cluster_size: int | None = None,
         max_cluster_fraction: float | None = None,
+        outlier_strategy: ClusterOutlierStrategy = "keep",
         metric: str = "cosine",
         similarity_threshold: float = 0.85,
         search: SearchRequest | None = None,
@@ -317,7 +319,10 @@ class AsyncKnowledgeBank:
         are clustered. ``max_cluster_size`` / ``max_cluster_fraction`` cap how
         many entries any one cluster may hold (absolute count / share of the
         scope; the stricter wins) — oversized vector clusters are recursively
-        split server-side.
+        split server-side. ``outlier_strategy`` controls noise handling on
+        vector fields: ``"keep"`` (default) | ``"reassign"`` (absorb into
+        nearby clusters) | ``"subcluster"`` (form new ``from_noise`` clusters
+        so no catch-all remains).
         """
         body: dict[str, Any] = {
             "method": method,
@@ -339,6 +344,9 @@ class AsyncKnowledgeBank:
             body["max_cluster_size"] = max_cluster_size
         if max_cluster_fraction is not None:
             body["max_cluster_fraction"] = max_cluster_fraction
+        if outlier_strategy != "keep":
+            # Omitted when default so older servers stay compatible.
+            body["outlier_strategy"] = outlier_strategy
         if search is not None:
             body["search"] = normalize_search_request(search)
         return await self._http.post(self._path("/cluster"), json=body)

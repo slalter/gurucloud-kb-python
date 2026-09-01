@@ -258,6 +258,13 @@ ClusterAlgorithm = Literal["auto", "kmeans", "agglomerative", "hdbscan"]
 """Vector-clustering algorithm. ``"auto"`` → HDBSCAN when ``k`` is omitted,
 else KMeans."""
 
+ClusterOutlierStrategy = Literal["keep", "reassign", "subcluster"]
+"""What to do with outlier/noise entries after vector clustering.
+``"keep"`` leaves them uncategorized (default); ``"reassign"`` absorbs each
+into its nearest cluster when it lies within that cluster's own spread;
+``"subcluster"`` re-clusters the noise into new clusters flagged
+``from_noise`` so no catch-all bucket remains."""
+
 
 class ClusterMember(TypedDict, total=False):
     """One entry within a cluster."""
@@ -279,6 +286,9 @@ class ClusterGroup(TypedDict, total=False):
     representative_entry_ids: list[str]
     values: list[str]  # distinct values in the group (fuzzy)
     members: list[ClusterMember]
+    from_noise: bool  # formed from former noise by outlier_strategy="subcluster"
+    low_cohesion: bool  # mean member distance is an outlier vs peers (likely catch-all)
+    mean_member_distance: float | None  # vector only; cohesion measure
 
 
 class FieldClusterResult(TypedDict, total=False):
