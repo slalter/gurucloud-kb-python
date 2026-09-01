@@ -302,6 +302,7 @@ class AsyncKnowledgeBank:
         max_cluster_size: int | None = None,
         max_cluster_fraction: float | None = None,
         outlier_strategy: ClusterOutlierStrategy = "keep",
+        reassign_percentile: float | None = None,
         metric: str = "cosine",
         similarity_threshold: float = 0.85,
         search: SearchRequest | None = None,
@@ -324,7 +325,9 @@ class AsyncKnowledgeBank:
         split server-side. ``outlier_strategy`` controls noise handling on
         vector fields: ``"keep"`` (default) | ``"reassign"`` (absorb into
         nearby clusters) | ``"subcluster"`` (form new ``from_noise`` clusters
-        so no catch-all remains). ``member_sample`` controls member sampling
+        so no catch-all remains; ``reassign_percentile`` tunes how far outside
+        a cluster's core ``"reassign"`` absorbs, server default 99).
+        ``member_sample`` controls member sampling
         past ``max_members_per_cluster``: ``"nearest"`` (default) | ``"diverse"``
         (anchor + farthest-point picks so fringe sub-themes are represented).
         """
@@ -351,6 +354,8 @@ class AsyncKnowledgeBank:
         if outlier_strategy != "keep":
             # Omitted when default so older servers stay compatible.
             body["outlier_strategy"] = outlier_strategy
+        if reassign_percentile is not None:
+            body["reassign_percentile"] = reassign_percentile
         if member_sample != "nearest":
             body["member_sample"] = member_sample
         if search is not None:

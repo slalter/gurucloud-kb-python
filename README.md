@@ -561,6 +561,17 @@ from gurucloud_kb import (
 
 ## Changelog
 
+### 0.1.15
+
+- **Tunable reassign radius** — `cluster()` (sync + async) accepts
+  `reassign_percentile` (50-100) controlling how far outside a cluster's
+  core `outlier_strategy="reassign"` will absorb noise (a noise entry joins
+  its nearest cluster only within that percentile of the cluster's own
+  member-to-centroid distances). The server default also moved from p90 to
+  p99, measured to absorb most genuinely-belonging noise while staying shy
+  on corpora whose noise is truly off-topic. Omitted from the request when
+  not set, so older servers keep working.
+
 ### 0.1.14
 
 - **Diverse member sampling** — `cluster()` (sync + async) accepts

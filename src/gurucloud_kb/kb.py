@@ -302,6 +302,7 @@ class KnowledgeBank:
         max_cluster_size: int | None = None,
         max_cluster_fraction: float | None = None,
         outlier_strategy: ClusterOutlierStrategy = "keep",
+        reassign_percentile: float | None = None,
         metric: str = "cosine",
         similarity_threshold: float = 0.85,
         search: SearchRequest | None = None,
@@ -364,6 +365,11 @@ class KnowledgeBank:
                 flagged ``from_noise`` so no catch-all bucket remains. Vector
                 fields only. Clusters whose spread is an outlier vs their
                 peers come back flagged ``low_cohesion`` either way.
+            reassign_percentile: for ``outlier_strategy="reassign"``, how far
+                outside a cluster's core to absorb (50-100): a noise entry
+                joins its nearest cluster only within this percentile of the
+                cluster's own member-to-centroid distances. Lower = stricter.
+                Omit for the server default (99).
             metric: ``"cosine"`` or ``"euclidean"`` (vector).
             similarity_threshold: fuzzy match cutoff 0..1 (1.0 = exact).
             search: optional :class:`SearchRequest` to scope which entries are
@@ -417,6 +423,8 @@ class KnowledgeBank:
         if outlier_strategy != "keep":
             # Omitted when default so older servers stay compatible.
             body["outlier_strategy"] = outlier_strategy
+        if reassign_percentile is not None:
+            body["reassign_percentile"] = reassign_percentile
         if member_sample != "nearest":
             body["member_sample"] = member_sample
         if search is not None:
