@@ -265,6 +265,12 @@ into its nearest cluster when it lies within that cluster's own spread;
 ``"subcluster"`` re-clusters the noise into new clusters flagged
 ``from_noise`` so no catch-all bucket remains."""
 
+ClusterMemberSample = Literal["nearest", "diverse"]
+"""How a vector cluster's returned members are sampled past
+``max_members_per_cluster``. ``"nearest"`` (default) returns the members
+closest to the centroid; ``"diverse"`` returns the nearest-centroid anchor
+plus greedy farthest-point picks so fringe sub-themes are represented."""
+
 
 class ClusterMember(TypedDict, total=False):
     """One entry within a cluster."""

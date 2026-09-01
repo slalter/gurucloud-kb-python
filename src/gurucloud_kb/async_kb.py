@@ -11,6 +11,7 @@ from gurucloud_kb.types import (
     BatchIngestResult,
     ClusterAlgorithm,
     ClusteringResult,
+    ClusterMemberSample,
     ClusterMethod,
     ClusterOutlierStrategy,
     DeduplicationEvent,
@@ -307,6 +308,7 @@ class AsyncKnowledgeBank:
         scope_limit: int = 2000,
         include_members: bool = True,
         max_members_per_cluster: int = 10,
+        member_sample: ClusterMemberSample = "nearest",
         label: bool = False,
         label_sample_size: int = 5,
     ) -> ClusteringResult:
@@ -322,7 +324,9 @@ class AsyncKnowledgeBank:
         split server-side. ``outlier_strategy`` controls noise handling on
         vector fields: ``"keep"`` (default) | ``"reassign"`` (absorb into
         nearby clusters) | ``"subcluster"`` (form new ``from_noise`` clusters
-        so no catch-all remains).
+        so no catch-all remains). ``member_sample`` controls member sampling
+        past ``max_members_per_cluster``: ``"nearest"`` (default) | ``"diverse"``
+        (anchor + farthest-point picks so fringe sub-themes are represented).
         """
         body: dict[str, Any] = {
             "method": method,
@@ -347,6 +351,8 @@ class AsyncKnowledgeBank:
         if outlier_strategy != "keep":
             # Omitted when default so older servers stay compatible.
             body["outlier_strategy"] = outlier_strategy
+        if member_sample != "nearest":
+            body["member_sample"] = member_sample
         if search is not None:
             body["search"] = normalize_search_request(search)
         return await self._http.post(self._path("/cluster"), json=body)

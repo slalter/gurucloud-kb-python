@@ -412,6 +412,20 @@ for group in result["results"][0]["clusters"]:
         print("refined:", group["size"], group.get("keywords"))
 ```
 
+By default a cluster's returned `members` are its most central entries.
+Pass `member_sample="diverse"` to get the nearest-centroid anchor plus greedy
+farthest-point picks instead, so fringe sub-themes reach the sample — useful
+when members feed a namer or summarizer that should see the whole cluster,
+not just its dense core (vector fields only):
+
+```python
+result = kb.cluster(
+    fields=["observation"],
+    max_members_per_cluster=12,
+    member_sample="diverse",
+)
+```
+
 Cluster only the results of a search by passing the same shape as `kb.search`:
 
 ```python
@@ -546,6 +560,15 @@ from gurucloud_kb import (
 ---
 
 ## Changelog
+
+### 0.1.14
+
+- **Diverse member sampling** — `cluster()` (sync + async) accepts
+  `member_sample` (`"nearest"` | `"diverse"`). `"diverse"` returns the
+  nearest-centroid anchor plus greedy farthest-point picks so fringe
+  sub-themes reach the member sample instead of only the cluster core.
+  Requires the 2026-09-01 server deploy; omitted from the request at its
+  default, so older servers keep working.
 
 ### 0.1.13
 

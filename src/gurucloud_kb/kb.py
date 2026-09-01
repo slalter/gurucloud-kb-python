@@ -11,6 +11,7 @@ from gurucloud_kb.types import (
     BatchIngestResult,
     ClusterAlgorithm,
     ClusteringResult,
+    ClusterMemberSample,
     ClusterMethod,
     ClusterOutlierStrategy,
     DeduplicationEvent,
@@ -307,6 +308,7 @@ class KnowledgeBank:
         scope_limit: int = 2000,
         include_members: bool = True,
         max_members_per_cluster: int = 10,
+        member_sample: ClusterMemberSample = "nearest",
         label: bool = False,
         label_sample_size: int = 5,
     ) -> ClusteringResult:
@@ -369,6 +371,13 @@ class KnowledgeBank:
             scope_limit: max entries to cluster when no ``search`` is given.
             include_members: include member entries per cluster.
             max_members_per_cluster: cap members returned per cluster.
+            member_sample: how members are sampled when a vector cluster
+                exceeds ``max_members_per_cluster`` — ``"nearest"`` (default)
+                returns the members closest to the centroid; ``"diverse"``
+                returns the nearest-centroid anchor plus greedy farthest-point
+                picks so fringe sub-themes are represented (useful when
+                members feed a namer/summarizer that should see the whole
+                cluster). Vector fields only.
             label: generate a short label per cluster (LLM when available, else
                 keyword-derived). Off by default — free and deterministic. When
                 on, ALL clusters of a field are named in a single batched call
@@ -408,6 +417,8 @@ class KnowledgeBank:
         if outlier_strategy != "keep":
             # Omitted when default so older servers stay compatible.
             body["outlier_strategy"] = outlier_strategy
+        if member_sample != "nearest":
+            body["member_sample"] = member_sample
         if search is not None:
             body["search"] = normalize_search_request(search)
         return self._http.post(self._path("/cluster"), json=body)

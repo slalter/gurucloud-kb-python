@@ -243,3 +243,45 @@ async def test_cluster_async_forwards_outlier_strategy() -> None:
 
     sent = json.loads(route.calls[0].request.content)
     assert sent["outlier_strategy"] == "reassign"
+
+
+@respx.mock
+def test_cluster_sync_forwards_member_sample_and_omits_default() -> None:
+    respx.get(f"{API_PREFIX}/banks/test-kb-uuid").mock(
+        return_value=httpx.Response(200, json={"data": KB_INFO})
+    )
+    kb = GuruCloudClient(api_key=API_KEY, base_url=BASE_URL).get_kb("test-kb-uuid")
+    route = respx.post(f"{API_PREFIX}/banks/test-kb-uuid/cluster").mock(
+        return_value=httpx.Response(
+            200, json={"data": {"scope": {"source": "all", "entry_count": 0}, "results": []}}
+        )
+    )
+
+    kb.cluster(member_sample="diverse")
+    kb.cluster()
+
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["member_sample"] == "diverse"
+    default = json.loads(route.calls[1].request.content)
+    assert "member_sample" not in default  # older servers stay compatible
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_cluster_async_forwards_member_sample() -> None:
+    respx.get(f"{API_PREFIX}/banks/test-kb-uuid").mock(
+        return_value=httpx.Response(200, json={"data": KB_INFO})
+    )
+    client = AsyncGuruCloudClient(api_key=API_KEY, base_url=BASE_URL)
+    kb = await client.get_kb("test-kb-uuid")
+    route = respx.post(f"{API_PREFIX}/banks/test-kb-uuid/cluster").mock(
+        return_value=httpx.Response(
+            200, json={"data": {"scope": {"source": "all", "entry_count": 0}, "results": []}}
+        )
+    )
+
+    await kb.cluster(member_sample="diverse")
+    await client.close()
+
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["member_sample"] == "diverse"
