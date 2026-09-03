@@ -41,12 +41,18 @@ class AsyncGuruCloudClient:
         """Initialize the async client.
 
         Args:
-            api_key: KB API key (starts with ``kb_``).
+            api_key: KB API key (``kb_...``) — or, against a self-hosted platform
+                (``base_url`` set), that platform's service token.
             base_url: GuruCloud API base URL (must use HTTPS).
             timeout: Request timeout in seconds.
             allow_insecure: Allow HTTP URLs (for local development only).
         """
-        if not api_key.startswith("kb_"):
+        if not api_key:
+            raise ValueError("api_key is required")
+        if base_url == _DEFAULT_BASE_URL and not api_key.startswith("kb_"):
+            # Hosted keys are always kb_-prefixed. A self-hosted platform
+            # (SPOG SOW §4 licensed deployment) authenticates with its own
+            # service token, whatever shape the deployer chose.
             raise ValueError("API key must start with 'kb_'")
 
         self._http = AsyncHTTPClient(
@@ -169,6 +175,11 @@ class AsyncGuruCloudClient:
             ``auth``, ``available_tools``).
         """
         return await self._http.post(f"/banks/{kb_id}/mcp-server-definition")
+
+    async def get_platform_mcp_server_definition(self) -> MCPServerDefinition:
+        """The bank-addressed MCP server of a self-hosted platform (see the
+        sync client for details)."""
+        return await self._http.post("/mcp-server-definition")
 
     # ── API key management ──────────────────────────────────────
 

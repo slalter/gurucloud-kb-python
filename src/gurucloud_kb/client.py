@@ -41,12 +41,18 @@ class GuruCloudClient:
         """Initialize the client.
 
         Args:
-            api_key: KB API key (starts with ``kb_``).
+            api_key: KB API key (``kb_...``) — or, against a self-hosted platform
+                (``base_url`` set), that platform's service token.
             base_url: GuruCloud API base URL (must use HTTPS).
             timeout: Request timeout in seconds.
             allow_insecure: Allow HTTP URLs (for local development only).
         """
-        if not api_key.startswith("kb_"):
+        if not api_key:
+            raise ValueError("api_key is required")
+        if base_url == _DEFAULT_BASE_URL and not api_key.startswith("kb_"):
+            # Hosted keys are always kb_-prefixed. A self-hosted platform
+            # (SPOG SOW §4 licensed deployment) authenticates with its own
+            # service token, whatever shape the deployer chose.
             raise ValueError("API key must start with 'kb_'")
 
         self._http = HTTPClient(
@@ -179,6 +185,21 @@ class GuruCloudClient:
             ``auth``, ``available_tools``).
         """
         return self._http.post(f"/banks/{kb_id}/mcp-server-definition")
+
+    def get_platform_mcp_server_definition(self) -> MCPServerDefinition:
+        """The bank-addressed MCP server of a self-hosted platform.
+
+        One server for every bank on the platform: its tools take ``kb``
+        (bank name or UUID) per call, plus ``list_knowledge_banks`` and
+        ``get_knowledge_bank_info``. Only a self-hosted platform serves this
+        (the hosted service answers 404).
+
+        Example::
+
+            server = client.get_platform_mcp_server_definition()
+            # {"type": "http", "url": "https://<platform>/mcp", ...}
+        """
+        return self._http.post("/mcp-server-definition")
 
     # ── API key management ──────────────────────────────────────
 

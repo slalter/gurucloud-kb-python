@@ -47,6 +47,15 @@ class TestClientInit:
         with pytest.raises(ValueError, match="kb_"):
             GuruCloudClient(api_key="invalid_key")
 
+    def test_self_hosted_base_url_accepts_platform_service_token(self) -> None:
+        c = GuruCloudClient(api_key="dec-platform-service-token", base_url="https://kb-platform.internal")
+        assert c._http._base_url == "https://kb-platform.internal"
+        c.close()
+
+    def test_empty_api_key_rejected_everywhere(self) -> None:
+        with pytest.raises(ValueError, match="required"):
+            GuruCloudClient(api_key="", base_url="https://kb-platform.internal")
+
     def test_accepts_valid_api_key(self) -> None:
         c = GuruCloudClient(api_key="kb_valid")
         assert repr(c) == f"GuruCloudClient(base_url='{BASE_URL}')" or "GuruCloudClient" in repr(c)

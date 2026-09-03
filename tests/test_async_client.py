@@ -49,6 +49,7 @@ class TestAsyncClientInit:
 
     def test_accepts_valid_api_key(self) -> None:
         c = AsyncGuruCloudClient(api_key="kb_valid")
+        assert AsyncGuruCloudClient(api_key="platform-token", base_url="https://kb-platform.internal") is not None
         assert "AsyncGuruCloudClient" in repr(c)
 
     @pytest.mark.asyncio

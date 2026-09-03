@@ -525,6 +525,38 @@ The MCP tools (`query_knowledge_bank`, `report_learning`) are generated from
 your schema — every searchable dimension becomes a `<dimension>_query`
 parameter automatically.
 
+### Self-hosted platform
+
+A licensed in-tenant deployment of the Knowledge Bank platform (the
+`kb-platform` container image, >= 1.1.0) serves the same API and the same
+per-bank MCP servers itself. Point the client at it with the platform's
+service token — no `kb_` key is involved:
+
+```python
+client = GuruCloudClient(
+    api_key=platform_service_token,
+    base_url="https://kb-platform.<your-container-apps-domain>",
+)
+kb = client.get_kb("spog-desk-prod-tx")          # bank NAME or UUID
+mcp_def = kb.get_mcp_server_definition()         # url = <platform>/kb/<id>/mcp
+```
+
+The definition is the platform's own MCP server for that bank: mount it as
+is (the Bearer token is the same service token). Its `available_tools` is
+exactly what the server's `tools/list` returns — `query_knowledge_bank`,
+`report_learning`, `get_kb_entry`, `edit_kb_entry`, `delete_kb_entry`,
+generated from the bank's schema — so a gateway that passes the definition
+through never needs to hard-code tool names.
+
+For a consumer that keeps one server attached and picks the bank per call,
+`client.get_platform_mcp_server_definition()` returns the bank-addressed
+server (`<platform>/mcp`; every tool takes `kb` = bank name or UUID, plus
+`list_knowledge_banks` / `get_knowledge_bank_info`).
+
+Not available on a self-hosted platform (the call raises `APIError` 501):
+`generate_pat()`, API-key management, retrieval assertions / evaluation runs,
+and deduplication events.
+
 ---
 
 ## Async
@@ -560,6 +592,18 @@ from gurucloud_kb import (
 ---
 
 ## Changelog
+
+### 0.1.16
+
+- **Self-hosted platform support** — `GuruCloudClient(base_url=<your
+  platform>, api_key=<platform service token>)` works against a licensed
+  in-tenant Knowledge Bank platform (kb-platform image >= 1.1.0). The
+  `kb_` key-prefix rule now applies only to the hosted `base_url`; a
+  self-hosted deployment authenticates with its own service token.
+  `kb.get_mcp_server_definition()` returns the platform's own MCP server
+  URL for the bank (`<platform>/kb/{kb_id}/mcp`), and the new
+  `client.get_platform_mcp_server_definition()` returns the bank-addressed
+  server (`<platform>/mcp`, tools take `kb`). See "Self-hosted platform".
 
 ### 0.1.15
 
