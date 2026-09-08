@@ -541,6 +541,7 @@ names matching playbooks under `matched_playbooks`.
 ```python
 client.list_kbs()                     # every KB your key can reach → [KBInfo]
 kb = client.get_kb("kb-uuid")         # bind a handle (fetches info)
+kb = client.get_kb("Support KB")      # ...or by exact bank name (409 if ambiguous)
 client.update_kb("kb-uuid", name="Support KB", description="...")
 client.delete_kb("kb-uuid")           # admin scope — irreversible
 
@@ -550,6 +551,7 @@ client.list_api_keys()
 client.delete_api_key(key["id"])
 
 client.get_mcp_server_definition("kb-uuid")   # same payload as kb.get_mcp_server_definition()
+client.get_mcp_server_definition("Support KB")   # by name; the payload carries kb_id + kb_name
 client.close()                        # or use `with GuruCloudClient(...) as client:`
 ```
 
@@ -572,9 +574,15 @@ agent_config = {
 pat = kb.generate_pat(token_name="My Agent")
 ```
 
-The MCP tools (`query_knowledge_bank`, `report_learning`) are generated from
-your schema — every searchable dimension becomes a `<dimension>_query`
-parameter automatically.
+`mcp_def["available_tools"]` is exactly what the server serves on
+`tools/list`: `query_knowledge_bank`, `report_learning`, `get_kb_entry`,
+`edit_kb_entry`, `delete_kb_entry`, `list_playbooks`, `get_playbook`,
+`upsert_playbook` — minus whatever the server's own read-only / allow / block
+configuration hides — so a gateway can pass the definition through without
+hard-coding tool names. The definition also carries `kb_id` and `kb_name`.
+`query_knowledge_bank` and `report_learning` are generated from your schema —
+every searchable dimension becomes a `<dimension>_query` parameter
+automatically.
 
 ### Self-hosted platform
 
@@ -644,6 +652,25 @@ from gurucloud_kb import (
 ---
 
 ## Changelog
+
+### 0.1.18
+
+- **`available_tools` is the served surface** — the hosted
+  `get_mcp_server_definition()` now lists every tool the bank's MCP server
+  serves on `tools/list` (`query_knowledge_bank`, `report_learning`,
+  `get_kb_entry`, `edit_kb_entry`, `delete_kb_entry`, `list_playbooks`,
+  `get_playbook`, `upsert_playbook`), honouring the server's own read-only /
+  allow / block configuration, instead of a hard-coded two-tool list. A
+  gateway can pass the definition through without hard-coding tool names.
+- **Address a bank by name** — every hosted `/banks/{kb}/...` route (and so
+  `client.get_kb(...)`, `client.get_mcp_server_definition(...)` and every
+  `KnowledgeBank` method) accepts the bank's exact name as well as its
+  `kb_id`, matching the self-hosted platform contract. An ambiguous name is
+  a 409 `ambiguous_bank_name` (`APIError`) listing the candidate ids.
+- **`kb_id` + `kb_name` on the definition** — `MCPServerDefinition` carries
+  both identifiers (hosted and self-hosted, platform image >= 1.2.1), so a
+  registry keyed on names recovers the id from the definition itself.
+  Requires the hosted API of 2026-09-08 or later.
 
 ### 0.1.17
 

@@ -46,6 +46,7 @@ from gurucloud_kb.types import (
     ClusterScope,
     FieldClusterResult,
     CategoryFilter,
+    LexicalOptions,
     CombinationMode,
     DeduplicationEvent,
     DeduplicationEventList,
@@ -101,6 +102,7 @@ __all__ = [
     "CombinationMode",
     "CategoryConfig",
     "CategoryFilter",
+    "LexicalOptions",
     "DimensionSchema",
     "SchemaWarning",
     "EntryInput",
@@ -140,4 +142,4 @@ __all__ = [
     "OverlapCandidate",
 ]
 
-__version__ = "0.1.17"
+__version__ = "0.1.18"

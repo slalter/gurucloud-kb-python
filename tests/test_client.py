@@ -409,6 +409,52 @@ class TestMCPServerDefinition:
         assert "oauth_client_id" not in result
 
     @respx.mock
+    def test_definition_carries_bank_identity_and_the_served_surface(self, client: GuruCloudClient) -> None:
+        """0.1.18 contract: kb_id/kb_name on the payload; available_tools is the
+        served surface (KB tools + playbook tools), not a hard-coded pair."""
+        served = [
+            "query_knowledge_bank", "report_learning", "get_kb_entry", "edit_kb_entry",
+            "delete_kb_entry", "list_playbooks", "get_playbook", "upsert_playbook",
+        ]
+        mcp_def = {
+            "kb_id": "test-kb-uuid",
+            "kb_name": "Test KB",
+            "server_name": "test-kb",
+            "type": "http",
+            "url": "https://test.gurucloudai.com/mcp/srv-uuid/mcp",
+            "description": "Test KB",
+            "auth": {"type": "bearer", "note": "Use your KB API key (kb_...) as the Bearer token."},
+            "available_tools": served,
+        }
+        # Addressed by NAME: the SDK sends the name verbatim and the payload
+        # hands back the resolved id, so no list_kbs() sweep is needed.
+        route = respx.post(f"{API_PREFIX}/banks/Test%20KB/mcp-server-definition").mock(
+            return_value=httpx.Response(200, json={"data": mcp_def})
+        )
+        result = client.get_mcp_server_definition("Test KB")
+        assert route.called
+        assert result["kb_id"] == "test-kb-uuid"
+        assert result["kb_name"] == "Test KB"
+        assert result["available_tools"] == served
+
+    @respx.mock
+    def test_ambiguous_bank_name_is_a_409_api_error_listing_candidates(self, client: GuruCloudClient) -> None:
+        from gurucloud_kb.errors import APIError
+
+        respx.post(f"{API_PREFIX}/banks/Twin/mcp-server-definition").mock(
+            return_value=httpx.Response(409, json={"error": {
+                "code": "ambiguous_bank_name",
+                "message": "Bank name 'Twin' matches 2 Knowledge Banks; address it by kb_id instead: a, b",
+                "kb_ids": ["a", "b"],
+            }})
+        )
+        with pytest.raises(APIError) as exc:
+            client.get_mcp_server_definition("Twin")
+        assert exc.value.status_code == 409
+        assert exc.value.code == "ambiguous_bank_name"
+        assert "a, b" in str(exc.value)
+
+    @respx.mock
     def test_get_mcp_server_definition_from_client(self, client: GuruCloudClient) -> None:
         mcp_def = {
             "server_name": "test-kb",

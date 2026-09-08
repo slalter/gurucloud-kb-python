@@ -527,7 +527,10 @@ class AsyncKnowledgeBank:
     async def get_mcp_server_definition(self) -> MCPServerDefinition:
         """Get the MCP server definition for agent injection.
 
-        Returns the MCP URL, server name, and available tools. The
+        Returns the MCP URL, server name, ``kb_id`` / ``kb_name``, and
+        ``available_tools`` — exactly the tools the bank's MCP server serves
+        on ``tools/list`` (KB tools plus playbook tools, minus whatever the
+        server's own read-only / allow / block config hides). The
         ``description`` field is the KB's own description (falling back to its
         name if unset) — the same text agents receive as
         ``initialize.instructions``. Change it in place with :meth:`update`.

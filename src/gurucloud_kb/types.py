@@ -192,6 +192,22 @@ class DimensionQuery(TypedDict, total=False):
     min_threshold: float
 
 
+class LexicalOptions(TypedDict, total=False):
+    """Opt-in lexical (full-text) arm for :class:`SearchRequest`.
+
+    Rare tokens from the dimension query texts are phrase-matched against
+    entry content and an IDF-weighted lexical score is ADDED to the combined
+    score (``boost`` per full match), so a query naming an exact identifier
+    surfaces the entry that literally contains it. Pass ``{}`` for the
+    service defaults; omit the key entirely for purely dense retrieval.
+    """
+
+    boost: float
+    max_df_ratio: float
+    max_tokens: int
+    query_text: str
+
+
 class CategoryFilter(TypedDict, total=False):
     """Bucket results by a metadata tag, each with its own cap/threshold."""
 
@@ -245,6 +261,7 @@ class SearchRequest(TypedDict, total=False):
     updated_before: str | datetime
     event_after: str | datetime
     event_before: str | datetime
+    lexical: LexicalOptions
 
 
 # ── Clustering ──────────────────────────────────────────────────
@@ -351,6 +368,12 @@ class MCPServerDefinition(TypedDict, total=False):
     ``generate_pat`` endpoint. Authenticate via :attr:`auth`.
     """
 
+    kb_id: str
+    """The bank's id — the SDK's addressing key. Present so a consumer that
+    addressed the bank by *name* gets the id back without a ``list_kbs()``
+    sweep (hosted API of 2026-09-08+, platform image >= 1.2.1)."""
+    kb_name: str
+    """The bank's canonical name (also accepted wherever ``kb_id`` is)."""
     server_name: str
     type: str  # always "http"
     url: str
@@ -361,6 +384,12 @@ class MCPServerDefinition(TypedDict, total=False):
     ``kb.update(description=...)``."""
     auth: MCPServerAuth
     available_tools: list[str]
+    """Exactly what the bank's MCP server serves on ``tools/list``: the KB
+    tools (``query_knowledge_bank``, ``report_learning``, ``get_kb_entry``,
+    ``edit_kb_entry``, ``delete_kb_entry``) plus the playbook tools
+    (``list_playbooks``, ``get_playbook``, ``upsert_playbook``), minus anything
+    the server's own read-only / allow / block configuration hides. A gateway
+    can pass the definition through without hard-coding tool names."""
 
 
 # ── API Keys ────────────────────────────────────────────────────

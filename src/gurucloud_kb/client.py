@@ -67,13 +67,16 @@ class GuruCloudClient:
         return self._http.get("/banks")
 
     def get_kb(self, kb_id: str) -> KnowledgeBank:
-        """Get a Knowledge Bank by ID, returning a :class:`KnowledgeBank` object.
+        """Get a Knowledge Bank by id **or exact name**, returning a :class:`KnowledgeBank`.
 
         The returned object has methods for schema management, entry
         CRUD, search, and MCP integration — all pre-bound to this KB.
 
         Args:
-            kb_id: Knowledge Bank UUID.
+            kb_id: Knowledge Bank UUID, or the bank's exact name. A name that
+                several of your banks share is a 409 ``ambiguous_bank_name``
+                (:class:`~gurucloud_kb.errors.APIError`, ``status_code`` 409)
+                listing the candidate ids — address it by id then.
 
         Returns:
             A :class:`KnowledgeBank` instance.
@@ -178,11 +181,14 @@ class GuruCloudClient:
         ``generate_pat_for_server``.
 
         Args:
-            kb_id: Knowledge Bank UUID.
+            kb_id: Knowledge Bank UUID, or the bank's exact name — the returned
+                definition carries the resolved ``kb_id`` (and ``kb_name``), so
+                a registry keyed on names never needs a ``list_kbs()`` sweep.
 
         Returns:
-            MCP server definition (``server_name``, ``url``, ``description``,
-            ``auth``, ``available_tools``).
+            MCP server definition (``kb_id``, ``kb_name``, ``server_name``,
+            ``url``, ``description``, ``auth``, ``available_tools`` — the
+            tools the bank's server actually serves).
         """
         return self._http.post(f"/banks/{kb_id}/mcp-server-definition")
 

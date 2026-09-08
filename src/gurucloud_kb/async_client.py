@@ -67,10 +67,11 @@ class AsyncGuruCloudClient:
         return await self._http.get("/banks")
 
     async def get_kb(self, kb_id: str) -> AsyncKnowledgeBank:
-        """Get a Knowledge Bank by ID, returning an :class:`AsyncKnowledgeBank` object.
+        """Get a Knowledge Bank by id **or exact name**, returning an :class:`AsyncKnowledgeBank`.
 
         Args:
-            kb_id: Knowledge Bank UUID.
+            kb_id: Knowledge Bank UUID, or the bank's exact name (an ambiguous
+                name is a 409 ``ambiguous_bank_name`` listing candidate ids).
 
         Returns:
             An :class:`AsyncKnowledgeBank` instance.
@@ -168,11 +169,13 @@ class AsyncGuruCloudClient:
         ``generate_pat_for_server``.
 
         Args:
-            kb_id: Knowledge Bank UUID.
+            kb_id: Knowledge Bank UUID, or the bank's exact name — the returned
+                definition carries the resolved ``kb_id`` (and ``kb_name``).
 
         Returns:
-            MCP server definition (``server_name``, ``url``, ``description``,
-            ``auth``, ``available_tools``).
+            MCP server definition (``kb_id``, ``kb_name``, ``server_name``,
+            ``url``, ``description``, ``auth``, ``available_tools`` — the
+            tools the bank's server actually serves).
         """
         return await self._http.post(f"/banks/{kb_id}/mcp-server-definition")
 

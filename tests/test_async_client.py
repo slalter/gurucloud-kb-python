@@ -344,6 +344,28 @@ class TestAsyncMCPServerDefinition:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_definition_by_name_carries_kb_id_and_served_tools(self, client: AsyncGuruCloudClient) -> None:
+        served = [
+            "query_knowledge_bank", "report_learning", "get_kb_entry", "edit_kb_entry",
+            "delete_kb_entry", "list_playbooks", "get_playbook", "upsert_playbook",
+        ]
+        mcp_def = {
+            "kb_id": "test-kb-uuid", "kb_name": "Test KB", "server_name": "test-kb",
+            "type": "http", "url": "https://test.gurucloudai.com/mcp/srv-uuid/mcp",
+            "description": "Test KB",
+            "auth": {"type": "bearer", "note": "Use your KB API key (kb_...) as the Bearer token."},
+            "available_tools": served,
+        }
+        route = respx.post(f"{API_PREFIX}/banks/Test%20KB/mcp-server-definition").mock(
+            return_value=httpx.Response(200, json={"data": mcp_def})
+        )
+        result = await client.get_mcp_server_definition("Test KB")
+        assert route.called
+        assert (result["kb_id"], result["kb_name"]) == ("test-kb-uuid", "Test KB")
+        assert result["available_tools"] == served
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_get_mcp_server_definition_from_client(self, client: AsyncGuruCloudClient) -> None:
         mcp_def = {
             "server_name": "test-kb",
