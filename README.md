@@ -485,6 +485,57 @@ scope to create/delete; `read` to list and evaluate.
 
 ---
 
+## Playbooks (procedures returned whole)
+
+Entries are atomic facts found by semantic top-k. A **playbook** is the other
+contract: a distinct, named, ordered procedure that is matched as a whole on
+its `title` + `when_to_use` and then returned **complete** — every step, in
+order — so an agent never runs a runbook with a step missing. A bank keeps one
+playbook per task.
+
+```python
+# Discover: rank the bank's playbooks by fit to the task at hand
+hits = kb.list_playbooks("file kanban cards during the hourly PM sweep")
+slug = hits["playbooks"][0]["slug"]
+
+# Fetch the whole procedure (steps in order; cited entries inlined)
+playbook = kb.get_playbook(slug)
+for step in playbook["steps"]:
+    print(step["position"], step["title"], step["body"])
+
+# Write / replace (versioned; every write is snapshotted)
+kb.upsert_playbook(
+    "pm-hourly-sweep-filing",
+    title="PM hourly sweep: filing cards under workstreams",
+    when_to_use="Running the hourly PM sweep on a board and deciding which "
+                "workstream and milestone each unfiled card belongs to",
+    steps=[
+        {"title": "List unfiled cards", "body": "kanban_search_tasks(unfiled=true)"},
+        {"title": "Assign each card", "body": "kanban_assign_task_to_phase …",
+         "kb_entry_id": "<entry holding the filing rule>"},   # optional citation
+    ],
+    change_note="initial version",
+)
+
+kb.list_playbook_versions("pm-hourly-sweep-filing")   # newest first, full snapshots
+kb.get_playbook_stats()                                # {"active": n, "draft": n, "superseded": n}
+kb.delete_playbook("pm-hourly-sweep-filing")           # snapshots are retained
+```
+
+**Overlap guard.** An `upsert_playbook` whose `when_to_use` scores at or above
+the bank's threshold (default 0.82 cosine) against another *active* playbook
+raises `PlaybookOverlapError` with `.candidates`. Extend the existing slug
+instead, give yours a genuinely different trigger, retire the old one with
+`supersedes_slug="old-slug"`, or pass `force=True` when the tasks really are
+distinct.
+
+Slugs are kebab-case (2–80 chars). Step `position`s are assigned from list
+order. The same three operations are exposed to agents as the MCP tools
+`list_playbooks` / `get_playbook` / `upsert_playbook`, and `query_knowledge_bank`
+names matching playbooks under `matched_playbooks`.
+
+---
+
 ## Manage KBs and API keys (client scope)
 
 ```python
@@ -546,7 +597,8 @@ is (the Bearer token is the same service token). Its `available_tools` is
 exactly what the server's `tools/list` returns — `query_knowledge_bank`,
 `report_learning`, `get_kb_entry`, `edit_kb_entry`, `delete_kb_entry`,
 generated from the bank's schema — so a gateway that passes the definition
-through never needs to hard-code tool names.
+through never needs to hard-code tool names. Platform images >= 1.2.0 also
+serve `list_playbooks` / `get_playbook` / `upsert_playbook`.
 
 For a consumer that keeps one server attached and picks the bank per call,
 `client.get_platform_mcp_server_definition()` returns the bank-addressed
@@ -592,6 +644,21 @@ from gurucloud_kb import (
 ---
 
 ## Changelog
+
+### 0.1.17
+
+- **Playbooks** — `kb.list_playbooks(query=None, status="active", limit=25,
+  min_score=0.0)`, `kb.get_playbook(slug)`, `kb.upsert_playbook(slug, title=,
+  when_to_use=, steps=, …)`, `kb.delete_playbook(slug)`,
+  `kb.list_playbook_versions(slug)`, `kb.get_playbook_stats()` (sync + async).
+  A playbook is a distinct, named, ordered procedure stored beside a bank's
+  entries and returned whole; `upsert_playbook` is versioned and raises the
+  new `PlaybookOverlapError` (409 `playbook_overlap`, `.candidates`) when it
+  collides with another active playbook. New typed contracts: `Playbook`,
+  `PlaybookList`, `PlaybookSummary`, `PlaybookStep`, `PlaybookStepInput`,
+  `PlaybookWriteResult`, `PlaybookVersion`, `PlaybookStats`, `LinkedEntry`,
+  `OverlapCandidate`, `PlaybookStatus`. Requires the hosted API of 2026-09-08
+  or a self-hosted platform image >= 1.2.0.
 
 ### 0.1.16
 

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from gurucloud_kb._http import HTTPClient
+from gurucloud_kb import _playbooks as _pb
+from gurucloud_kb._playbooks import qs as _qs
 from gurucloud_kb._search import build_string_search, normalize_search_request
 from gurucloud_kb.types import (
     BatchIngestResult,
@@ -26,6 +28,13 @@ from gurucloud_kb.types import (
     SchemaWarning,
     SearchRequest,
     SearchResult,
+    Playbook,
+    PlaybookList,
+    PlaybookStats,
+    PlaybookStatus,
+    PlaybookStepInput,
+    PlaybookVersion,
+    PlaybookWriteResult,
 )
 
 
@@ -497,6 +506,82 @@ class KnowledgeBank:
         return self._http.get(self._path(f"/retrieval-eval/runs/{run_id}"))
 
     # ── MCP integration ─────────────────────────────────────────
+
+    # ── Playbooks ──────────────────────────────────────────────
+
+    def list_playbooks(
+        self,
+        query: str | None = None,
+        *,
+        status: PlaybookStatus | Literal["all"] = "active",
+        limit: int = 25,
+        min_score: float = 0.0,
+    ) -> PlaybookList:
+        """List this bank's playbooks — distinct, named, ordered procedures.
+
+        With ``query`` (describe the task at hand) the rows are ranked by
+        cosine similarity of the query to each playbook's ``title`` +
+        ``when_to_use`` and carry a ``score``; without it, newest-updated
+        first. ``status="all"`` includes drafts and superseded playbooks.
+
+        Example::
+
+            hits = kb.list_playbooks("file kanban cards during the PM sweep")
+            slug = hits["playbooks"][0]["slug"]
+            playbook = kb.get_playbook(slug)      # every step, in order
+        """
+        return self._http.get(self._path("/playbooks"), params=_pb.list_params(query, status, limit, min_score))
+
+    def get_playbook_stats(self) -> PlaybookStats:
+        """Playbook counts by status (``active`` / ``draft`` / ``superseded``)."""
+        return self._http.get(self._path("/playbook-stats"))
+
+    def get_playbook(self, slug: str, *, include_linked_entries: bool = True) -> Playbook:
+        """Fetch one playbook whole: every step in order plus the entries its
+        steps cite (``linked_entries``). Raises :class:`NotFoundError` for an
+        unknown slug."""
+        return self._http.get(self._path(f"/playbooks/{slug}"), params=_pb.linked_params(include_linked_entries))
+
+    def upsert_playbook(
+        self,
+        slug: str,
+        *,
+        title: str,
+        when_to_use: str,
+        steps: list[PlaybookStepInput] | list[dict[str, Any]],
+        summary: str = "",
+        status: PlaybookStatus = "active",
+        supersedes_slug: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        change_note: str = "",
+        changed_by: str | None = None,
+        force: bool = False,
+    ) -> PlaybookWriteResult:
+        """Create or fully replace the playbook at ``slug`` (versioned).
+
+        ``when_to_use`` is what matching runs on — phrase it the way an agent
+        would describe its task. ``steps`` are replaced wholesale; positions
+        come from list order. Every write snapshots the full playbook into its
+        version history.
+
+        The bank keeps one playbook per task: a write whose ``when_to_use``
+        overlaps another ACTIVE playbook raises :class:`PlaybookOverlapError`
+        with the candidates. Pass ``supersedes_slug`` to retire the old one in
+        the same write, or ``force=True`` when the tasks really are distinct.
+        """
+        body = _pb.upsert_body(
+            title=title, when_to_use=when_to_use, steps=steps, summary=summary, status=status,
+            supersedes_slug=supersedes_slug, metadata=metadata, change_note=change_note, changed_by=changed_by,
+        )
+        return self._http.put(self._path(f"/playbooks/{slug}") + _qs(_pb.force_params(force)), json=body)
+
+    def delete_playbook(self, slug: str) -> dict[str, Any]:
+        """Hard-delete a playbook. Its version snapshots are retained."""
+        return self._http.delete(self._path(f"/playbooks/{slug}"))
+
+    def list_playbook_versions(self, slug: str) -> list[PlaybookVersion]:
+        """Version history for a playbook, newest first (full snapshots)."""
+        return self._http.get(self._path(f"/playbooks/{slug}/versions"))
 
     def get_mcp_config(self) -> dict[str, Any]:
         """Get the ``.mcp.json`` snippet for this KB."""

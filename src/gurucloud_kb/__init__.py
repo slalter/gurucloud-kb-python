@@ -27,6 +27,7 @@ from gurucloud_kb.errors import (
     GuruCloudError,
     NotFoundError,
     PermissionError,
+    PlaybookOverlapError,
     RateLimitError,
 )
 from gurucloud_kb.kb import KnowledgeBank
@@ -63,6 +64,17 @@ from gurucloud_kb.types import (
     SchemaWarning,
     SearchRequest,
     SearchResult,
+    LinkedEntry,
+    OverlapCandidate,
+    Playbook,
+    PlaybookList,
+    PlaybookStats,
+    PlaybookStatus,
+    PlaybookStep,
+    PlaybookStepInput,
+    PlaybookSummary,
+    PlaybookVersion,
+    PlaybookWriteResult,
 )
 
 __all__ = [
@@ -79,6 +91,7 @@ __all__ = [
     "PermissionError",
     "NotFoundError",
     "RateLimitError",
+    "PlaybookOverlapError",
     "ConnectionError",
     # Types
     "KBInfo",
@@ -113,6 +126,18 @@ __all__ = [
     "DeduplicationEventList",
     "EntryEventLog",
     "EntryEventLogList",
+    # Playbooks
+    "Playbook",
+    "PlaybookList",
+    "PlaybookStats",
+    "PlaybookStatus",
+    "PlaybookStep",
+    "PlaybookStepInput",
+    "PlaybookSummary",
+    "PlaybookVersion",
+    "PlaybookWriteResult",
+    "LinkedEntry",
+    "OverlapCandidate",
 ]
 
-__version__ = "0.1.16"
+__version__ = "0.1.17"

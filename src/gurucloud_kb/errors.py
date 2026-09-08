@@ -59,3 +59,27 @@ class ConnectionError(GuruCloudError):
 
     def __init__(self, message: str = "Failed to connect to GuruCloud API") -> None:
         super().__init__(message)
+
+
+class PlaybookOverlapError(APIError):
+    """Raised on 409 ``playbook_overlap``: the playbook you tried to write
+    covers the same task as an existing ACTIVE playbook.
+
+    Attributes:
+        slug: the slug you tried to write.
+        threshold: cosine similarity at or above which the bank refuses.
+        candidates: the overlapping playbooks (``slug``, ``title``,
+            ``when_to_use``, ``similarity``).
+
+    Resolve by upserting the existing slug with the merged procedure, giving
+    yours a genuinely different ``when_to_use``, passing
+    ``supersedes_slug=<old>`` to retire the old one, or ``force=True`` if the
+    tasks really are distinct.
+    """
+
+    def __init__(self, message: str, details: dict | None = None) -> None:
+        details = details or {}
+        self.slug: str | None = details.get("slug")
+        self.threshold: float | None = details.get("threshold")
+        self.candidates: list[dict] = list(details.get("candidates") or [])
+        super().__init__(409, "playbook_overlap", message)

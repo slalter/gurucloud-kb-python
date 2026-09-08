@@ -477,3 +477,107 @@ class EntryEventLogList(TypedDict, total=False):
     total: int
     limit: int
     offset: int
+
+
+# ── Playbooks ──────────────────────────────────────────────────
+
+PlaybookStatus = Literal["draft", "active", "superseded"]
+"""Lifecycle of a playbook. Only ``active`` playbooks are matched and take
+part in the overlap guard; ``superseded`` ones are kept for the audit trail."""
+
+
+class PlaybookStepInput(TypedDict, total=False):
+    """One ordered step as written by the caller (positions come from list order)."""
+
+    title: str
+    body: str
+    kb_entry_id: str
+    """Optional entry id whose fact this step relies on; ``get_playbook``
+    inlines it under ``linked_entries`` instead of duplicating the fact."""
+
+
+class PlaybookStep(PlaybookStepInput, total=False):
+    """A stored step: the input fields plus its 1-based ``position``."""
+
+    position: int
+
+
+class PlaybookSummary(TypedDict, total=False):
+    """Compact index row returned by ``list_playbooks``."""
+
+    id: str
+    slug: str
+    title: str
+    when_to_use: str
+    summary: str
+    status: PlaybookStatus
+    version: int
+    step_count: int
+    updated_at: str | None
+    score: float | None
+    """Cosine similarity to the query when one was given, else ``None``."""
+
+
+class PlaybookList(TypedDict, total=False):
+    playbooks: list[PlaybookSummary]
+    total_active: int
+    query: str | None
+
+
+class LinkedEntry(TypedDict, total=False):
+    """A KB entry a step cites via ``kb_entry_id``, inlined on read."""
+
+    id: str
+    content: str | None
+    useful_for: str | None
+    missing: bool
+
+
+class Playbook(TypedDict, total=False):
+    """The whole playbook — every step, in order."""
+
+    id: str
+    slug: str
+    title: str
+    when_to_use: str
+    summary: str
+    status: PlaybookStatus
+    version: int
+    supersedes_id: str | None
+    created_by: str | None
+    metadata: dict[str, Any]
+    created_at: str | None
+    updated_at: str | None
+    steps: list[PlaybookStep]
+    linked_entries: list[LinkedEntry]
+
+
+class PlaybookWriteResult(TypedDict, total=False):
+    action: Literal["created", "updated"]
+    playbook: Playbook
+
+
+class PlaybookVersion(TypedDict, total=False):
+    """One snapshot from the playbook's version history (newest first)."""
+
+    version: int
+    change_note: str
+    changed_by: str | None
+    created_at: str | None
+    snapshot: dict[str, Any]
+
+
+class PlaybookStats(TypedDict, total=False):
+    active: int
+    draft: int
+    superseded: int
+
+
+class OverlapCandidate(TypedDict, total=False):
+    """An existing active playbook that blocked an upsert."""
+
+    id: str
+    slug: str
+    title: str
+    when_to_use: str
+    similarity: float
