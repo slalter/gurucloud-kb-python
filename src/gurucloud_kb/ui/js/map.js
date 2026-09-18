@@ -20,7 +20,9 @@ import { dimsOf, primaryDim, textOnlyDims, truncate } from './schema_utils.js';
 
 const COLORS = {
   entry: '#72a6ab', entryBorder: '#456f73', hit: '#f2b23a', hitBorder: '#a06a00',
-  cluster: 'rgba(114,166,171,0.14)', clusterBorder: '#72a6ab', noise: 'rgba(183,179,168,0.16)', noiseBorder: '#b7b3a8',
+  // Cytoscape ignores the alpha in an rgba() colour and paints at background-opacity, so a fill is a
+  // solid colour plus an explicit opacity (rgba + opacity 1 drew solid teal boxes that hid the entries).
+  cluster: '#72a6ab', clusterOpacity: 0.14, clusterBorder: '#72a6ab', noise: '#b7b3a8', noiseOpacity: 0.16, noiseBorder: '#b7b3a8',
   playbook: '#4d3a80', step: '#8f7bc4', link: '#8f7bc4', text: '#3d3d3d',
 };
 
@@ -69,7 +71,8 @@ export function createMapView(ctx) {
       field('Outliers', outlierSel),
       field('Scope (semantic)', scopeInput),
       h('div', { class: 'kbx-field' }, h('label', {}, ' '), h('label', { class: 'kbx-check' }, labelCb, 'Name clusters (LLM)')),
-      h('div', { class: 'kbx-field' }, h('label', {}, ' '), h('label', { class: 'kbx-check' }, playbooksCb, 'Show playbooks'))));
+      h('div', { class: 'kbx-field' }, h('label', {}, ' '), h('label', { class: 'kbx-check' }, playbooksCb, 'Show playbooks')),
+      h('div', { class: 'kbx-field' }, h('label', {}, ' '), h('label', { class: 'kbx-check', title: 'Entries that sit closer to another cluster than their own are moved there, or left off the map when they fit nowhere. Turn off to place every entry.' }, peelCb, 'Set aside misfits'))));
 
   function field(label, input) { return h('div', { class: 'kbx-field' }, h('label', {}, label), input); }
 
@@ -203,11 +206,11 @@ export function createMapView(ctx) {
       boxSelectionEnabled: false, autounselectify: true,
       style: [
         { selector: 'node.cluster', style: {
-          shape: 'round-rectangle', 'background-color': COLORS.cluster, 'background-opacity': 1, 'border-width': 1.5, 'border-color': COLORS.clusterBorder,
+          shape: 'round-rectangle', 'background-color': COLORS.cluster, 'background-opacity': COLORS.clusterOpacity, 'border-width': 1.5, 'border-color': COLORS.clusterBorder,
           'corner-radius': 40, padding: '18px', label: 'data(label)', 'text-valign': 'top', 'text-halign': 'center', 'text-margin-y': -6,
           'font-size': 13, 'font-weight': 600, color: COLORS.text, 'text-wrap': 'wrap', 'text-max-width': 220, 'font-family': 'Aspekta, -apple-system, Segoe UI, Roboto, sans-serif',
         } },
-        { selector: 'node.cluster.noise', style: { 'background-color': COLORS.noise, 'border-color': COLORS.noiseBorder, 'border-style': 'dashed', color: '#6b6b6b' } },
+        { selector: 'node.cluster.noise', style: { 'background-color': COLORS.noise, 'background-opacity': COLORS.noiseOpacity, 'border-color': COLORS.noiseBorder, 'border-style': 'dashed', color: '#6b6b6b' } },
         { selector: 'node.cluster.low', style: { 'border-style': 'dotted' } },
         { selector: 'node.entry', style: {
           shape: 'ellipse', width: 'data(d)', height: 'data(d)', 'background-color': COLORS.entry, 'border-width': 1, 'border-color': COLORS.entryBorder, label: '',

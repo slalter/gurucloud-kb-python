@@ -690,6 +690,16 @@ from gurucloud_kb import (
 
 ## Changelog
 
+### 0.2.6
+
+- **Map: entries are visible inside their clusters.** Cluster and outlier boxes
+  now draw with a light fill. They were painted solid, which hid the entry dots
+  (Cytoscape ignores the alpha in an `rgba()` colour and uses
+  `background-opacity`).
+- **Map: "Set aside misfits" toggle.** The option was always on with no control
+  in the toolbar, so entries that fit no cluster were left off the map. Uncheck
+  it to place every entry. The choice is remembered per bank.
+
 ### 0.2.5
 
 - **Live stats in the Knowledge Banks table on every host.** `gurucloud-kb ui`
