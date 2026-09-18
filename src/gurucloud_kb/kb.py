@@ -13,11 +13,13 @@ from gurucloud_kb.types import (
     BatchIngestResult,
     ClusterAlgorithm,
     ClusteringResult,
+    ClusterLabelSample,
     ClusterMemberSample,
     ClusterMethod,
     ClusterOutlierStrategy,
     DeduplicationEvent,
     DeduplicationEventList,
+    RecentQueryList,
     DimensionConfig,
     DimensionSchema,
     EntryEventLogList,
@@ -307,6 +309,8 @@ class KnowledgeBank:
         method: ClusterMethod = "auto",
         algorithm: ClusterAlgorithm = "auto",
         k: int | None = None,
+        target_cluster_size: int | None = None,
+        peel_misfits: bool = False,
         min_cluster_size: int = 5,
         max_cluster_size: int | None = None,
         max_cluster_fraction: float | None = None,
@@ -320,7 +324,8 @@ class KnowledgeBank:
         max_members_per_cluster: int = 10,
         member_sample: ClusterMemberSample = "nearest",
         label: bool = False,
-        label_sample_size: int = 5,
+        label_sample_size: int | None = None,
+        label_sample: ClusterLabelSample | None = None,
     ) -> ClusteringResult:
         """Group the KB's entries by one or more fields.
 
@@ -349,7 +354,10 @@ class KnowledgeBank:
             fields: Fields to cluster on. Omit to let the server cluster the
                 KB's primary embedding dimension (its first required SINGLE
                 dimension, else its first SINGLE dimension). A MULTI dimension
-                (tags, products, ...) groups entries by its values.
+                (tags, products, ...) groups entries by its values. Pass
+                ``["*"]`` to cluster across ALL embedding dimensions combined
+                with the schema's search weights, so two entries are close
+                exactly when a multi-dimension search would rank them together.
             method: ``"auto"`` | ``"vector"`` | ``"fuzzy"``.
             algorithm: vector algorithm — ``"auto"`` (HDBSCAN when ``k`` is
                 omitted, else KMeans) | ``"kmeans"`` | ``"agglomerative"`` |
@@ -374,6 +382,15 @@ class KnowledgeBank:
                 flagged ``from_noise`` so no catch-all bucket remains. Vector
                 fields only. Clusters whose spread is an outlier vs their
                 peers come back flagged ``low_cohesion`` either way.
+            target_cluster_size: entries per cluster the AUTOMATIC cluster
+                count aims for when ``k`` is omitted (service default 35, no
+                ceiling on the count). Lower = more, tighter clusters whose
+                names fit their members better; raise it for a coarser view.
+            peel_misfits: pull out entries that sit closer to another cluster
+                than their own and hand them to ``outlier_strategy``
+                (``"subcluster"`` regroups them and leaves unplaced the ones
+                that fit nowhere). Names fit their clusters better; some
+                entries end up unplaced (``noise_count``). Off by default.
             reassign_percentile: for ``outlier_strategy="reassign"``, how far
                 outside a cluster's core to absorb (50-100): a noise entry
                 joins its nearest cluster only within this percentile of the
@@ -392,14 +409,20 @@ class KnowledgeBank:
                 returns the nearest-centroid anchor plus greedy farthest-point
                 picks so fringe sub-themes are represented (useful when
                 members feed a namer/summarizer that should see the whole
-                cluster). Vector fields only.
+                cluster); members are always distinct — a zero-spread
+                remainder fills nearest-to-centroid. Vector fields only.
             label: generate a short label per cluster (LLM when available, else
                 keyword-derived). Off by default — free and deterministic. When
                 on, ALL clusters of a field are named in a single batched call
                 (fast and mutually distinct), not one call per cluster.
-            label_sample_size: when ``label=True``, how many representative
-                members per cluster feed the labeler — nearest-centroid for
-                vector fields, most distinct values for fuzzy. Default 5.
+            label_sample_size: when ``label=True``, how many members per
+                cluster the namer is shown. Omit for the service default (8).
+                No upper bound.
+            label_sample: which members the namer is shown — ``"spread"``
+                (service default: centre out toward the edge, so the name
+                covers the whole cluster) or ``"nearest"`` (only the most
+                central members; precise for the core, often wrong for the
+                rest). Affects naming only, never the returned members.
 
         Returns:
             A :class:`ClusteringResult` with one :class:`FieldClusterResult` per
@@ -419,7 +442,6 @@ class KnowledgeBank:
             "include_members": include_members,
             "max_members_per_cluster": max_members_per_cluster,
             "label": label,
-            "label_sample_size": label_sample_size,
         }
         if fields is not None:
             body["fields"] = list(fields)
@@ -434,6 +456,14 @@ class KnowledgeBank:
             body["outlier_strategy"] = outlier_strategy
         if reassign_percentile is not None:
             body["reassign_percentile"] = reassign_percentile
+        if target_cluster_size is not None:
+            body["target_cluster_size"] = target_cluster_size
+        if peel_misfits:
+            body["peel_misfits"] = True
+        if label_sample_size is not None:
+            body["label_sample_size"] = label_sample_size
+        if label_sample is not None:
+            body["label_sample"] = label_sample
         if member_sample != "nearest":
             body["member_sample"] = member_sample
         if search is not None:
@@ -550,19 +580,22 @@ class KnowledgeBank:
         when_to_use: str,
         steps: list[PlaybookStepInput] | list[dict[str, Any]],
         summary: str = "",
-        status: PlaybookStatus = "active",
+        status: PlaybookStatus | None = None,
         supersedes_slug: str | None = None,
         metadata: dict[str, Any] | None = None,
         change_note: str = "",
         changed_by: str | None = None,
         force: bool = False,
     ) -> PlaybookWriteResult:
-        """Create or fully replace the playbook at ``slug`` (versioned).
+        """Create or update the playbook at ``slug`` (versioned).
 
         ``when_to_use`` is what matching runs on — phrase it the way an agent
         would describe its task. ``steps`` are replaced wholesale; positions
-        come from list order. Every write snapshots the full playbook into its
-        version history.
+        come from list order. ``status`` and ``metadata`` are preserve-on-absent:
+        left as ``None`` they keep the stored values on an existing playbook
+        (a new one defaults to ``"active"`` / ``{}``); pass ``metadata={}`` to
+        clear it. Every write snapshots the full playbook into its version
+        history.
 
         The bank keeps one playbook per task: a write whose ``when_to_use``
         overlaps another ACTIVE playbook raises :class:`PlaybookOverlapError`
@@ -575,9 +608,13 @@ class KnowledgeBank:
         )
         return self._http.put(self._path(f"/playbooks/{slug}") + _qs(_pb.force_params(force)), json=body)
 
-    def delete_playbook(self, slug: str) -> dict[str, Any]:
-        """Hard-delete a playbook. Its version snapshots are retained."""
-        return self._http.delete(self._path(f"/playbooks/{slug}"))
+    def delete_playbook(
+        self, slug: str, *, reason: str | None = None, changed_by: str | None = None
+    ) -> dict[str, Any]:
+        """Hard-delete a playbook. Its version snapshots are retained and a
+        tombstone version carrying ``reason`` / ``changed_by`` is appended, so
+        :meth:`list_playbook_versions` still shows what was removed and why."""
+        return self._http.delete(self._path(f"/playbooks/{slug}") + _pb.qs(_pb.delete_params(reason, changed_by)))
 
     def list_playbook_versions(self, slug: str) -> list[PlaybookVersion]:
         """Version history for a playbook, newest first (full snapshots)."""
@@ -699,11 +736,25 @@ class KnowledgeBank:
             params["entry_id"] = entry_id
         return self._http.get(self._path("/event-logs"), params=params)
 
-    # ── stats ───────────────────────────────────────────────────
+    # ── stats / history ─────────────────────────────────────────
 
     def get_stats(self) -> dict[str, Any]:
         """Get performance statistics."""
         return self._http.get(self._path("/stats"))
+
+    def list_recent_queries(self, *, limit: int = 50) -> RecentQueryList:
+        """The most recent searches run against this bank, newest first.
+
+        Every semantic query — from agents' MCP tools, the SDK, or the explorer
+        — is logged with its duration, result count, filters and source.
+
+        Args:
+            limit: Max queries to return (default 50, max 200).
+
+        Returns:
+            Dict with ``queries`` (list of :class:`RecentQuery`) and ``limit``.
+        """
+        return self._http.get(self._path("/queries"), params={"limit": limit})
 
     # ── dunder ──────────────────────────────────────────────────
 

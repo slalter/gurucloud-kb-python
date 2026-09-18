@@ -1,0 +1,5 @@
+{
+  "type": "module",
+  "private": true,
+  "description": "Marks the KB Explorer modules as ES modules so Node can import them in tests. Browsers ignore this file."
+}

@@ -536,6 +536,43 @@ names matching playbooks under `matched_playbooks`.
 
 ---
 
+## Explore a KB in the browser
+
+The SDK ships the Knowledge Bank Explorer — the same UI the hosted app serves
+at `/knowledgebank/<kb_id>/explore` — and can serve it locally:
+
+```bash
+export GURUCLOUD_KB_API_KEY=kb_...
+gurucloud-kb ui --kb "My KB"          # opens http://127.0.0.1:8765/?kb=My%20KB
+gurucloud-kb ui                       # no --kb: pick from the banks your key can see
+```
+
+or from Python:
+
+```python
+client.serve_ui("My KB")              # blocks until Ctrl-C; open_browser=False to stay headless
+```
+
+A small stdlib server serves the bundled HTML/JS from this package and proxies
+the UI's calls through this client, so the API key never reaches the browser
+and nothing is installed beyond `gurucloud-kb`. It works against the hosted API
+and against a self-hosted platform (`--base-url https://<platform>` with the
+service token as the key). The self-hosted platform image also serves the same
+UI itself at `/ui`.
+
+Tabs: **Entries** (weighted multi-dimension search, exact-match filters for
+text-only dimensions such as a business bank's `kind`, add / edit / delete,
+"Promote to playbook"), **Map** (cluster the bank's embeddings with
+`kb.cluster()` and see every entry placed by similarity, with playbooks drawn
+as step chains linked to the entries they cite), **Playbooks**, **Schema**,
+**Quality** (assertions, retrieval-eval runs), **History** (recent queries,
+deduplication events, entry event log) and **Connect** (MCP config, server
+definition, generated tools).
+
+```python
+kb.list_recent_queries(limit=20)   # {"queries": [{query_text, duration_ms, result_count, filters_used, query_source, created_at}, …], "limit": 20}
+```
+
 ## Manage KBs and API keys (client scope)
 
 ```python
@@ -652,6 +689,120 @@ from gurucloud_kb import (
 ---
 
 ## Changelog
+
+### 0.2.5
+
+- **Live stats in the Knowledge Banks table on every host.** `gurucloud-kb ui`
+  and the self-hosted platform `/ui` now feed the table's playbooks, 7d / 24h
+  query volume, no-hit rate and recency columns: the SDK server proxies the new
+  hosted `GET /api/v1/kb/bank-stats`, and the platform maps
+  `/api/kb-explorer-bank-stats` onto its own `GET /api/v1/kb/bank-stats`
+  (`/kb/stats-summary`). The bundle reads the feed from `data-stats-url`
+  and accepts both the bare and the `{"data": ...}` envelope.
+
+### 0.2.4
+
+- **Knowledge Banks table: access + row actions.** Bank rows carry an
+  `access` value (`owner` / `granted` / `admin`) when the host's bank list
+  provides one; a granted bank shows a "granted" chip and no Clear / Delete.
+  Hosted-app extras switched on by `data-create-url`, `data-api-keys-url` and
+  `data-tier-url` on `#kbx-root`: header buttons, a plan badge, and per-row
+  Connect / Clear / Delete actions with confirmation dialogs. The SDK server
+  and the platform `/ui` are unchanged (no attributes, no actions).
+
+### 0.2.3
+
+Cluster naming and sizing, changed after a measured evaluation on a 2,000-entry
+bank (an LLM judge scoring names against members the namer never saw): names
+fit 30% of a cluster's unseen members before, 48% after; the core of a cluster
+41% before, 63% after.
+
+- **Behaviour change (service-side, affects every client on upgrade of the
+  platform, not of this package):** with `algorithm="auto"` and no `k`, the
+  automatic cluster count is no longer capped at 10. It is
+  `max(sqrt(n/2), n / target_cluster_size)` with `target_cluster_size`
+  defaulting to 35, so 2,000 entries give about 57 clusters instead of 10.
+  **Pass `k=` (or a larger `target_cluster_size`) to keep a coarse view.** If
+  you cache cluster titles keyed on member sets, expect one re-naming pass.
+- **`kb.cluster(target_cluster_size=...)`** — entries per cluster the automatic
+  count aims for.
+- **`kb.cluster(label_sample="spread" | "nearest")`** — which members the namer
+  sees. The service default is now `"spread"` (centre out toward the edge) with
+  8 samples; `"nearest"` restores the old core-only sample.
+  `label_sample_size` is now sent only when you pass it (it used to force 5).
+- **`kb.cluster(fields=["*"])`** — cluster across every embedding dimension,
+  combined with the schema's search weights (the weighted-sum search score is
+  exactly the cosine of the weighted concatenation, so "close" means the same
+  thing it means in a query). Limited to 20,000 entries per call.
+- **Cluster descriptions.** With `label=True` each cluster now also carries a
+  one-sentence `description`. This was the largest measured gain: a name alone
+  fit 40% of a cluster's members, name plus description 55-58%. The namer also
+  reads each sampled entry's `useful_for` when it has one. `batch` size for
+  naming is 20 clusters per call.
+- **`kb.cluster(peel_misfits=True)`** — sets aside entries that sit closer to
+  another cluster than their own (negative silhouette); with
+  `outlier_strategy="subcluster"` they are regrouped and the ones that fit
+  nowhere are left unplaced. Measured: names fit 51% of unseen members against
+  39%, with 22% of entries unplaced. Opt-in; the Explorer Map turns it on.
+- Cluster `keywords` are now distinctive terms (class-based TF-IDF across the
+  clusters, up to 8, unigrams and bigrams) instead of raw word counts.
+- Limits removed: `max_members_per_cluster` and `label_sample_size` have no
+  upper bound; every cluster is LLM-named (the 2,000-cluster ceiling is now an
+  optional operator setting); label length trim 60 → 120 characters.
+- More robust naming: labels are keyed by cluster number, so a model miscount
+  costs one cluster its name instead of a whole 40-cluster batch.
+
+### 0.2.2
+
+- **Knowledge Banks table.** The explorer's bank picker (`gurucloud-kb ui`
+  with no `--kb`, the platform `/ui`, and the hosted app) is now a sortable
+  table instead of a card grid: filter by name / description / id, sort any
+  column (unknown values sink to the bottom), a totals row, and banks with no
+  entries and no playbooks hidden behind a "Show empty banks" toggle. When
+  the host offers a per-bank live-stats feed (`data-stats-url`; the hosted
+  app's `/api/kb-explorer/banks/stats`, backed by the KB service's
+  `GET /kb/stats-summary`) the table also shows playbooks, 7d / 24h query
+  volume, no-hit rate and last query / last entry recency; without one it
+  stands on the bank list's own columns.
+
+### 0.2.1
+
+- **Explorer header counts.** The "Total queries" tile is the bank's lifetime
+  query count (from `/info`); the latency tiles are labelled as the KB
+  service's last-hour window ("Avg query (1h)", "P95 query (1h)") and read
+  "—" when nothing ran in that window instead of a misleading `0.0 ms`. The
+  Entries tab caption adds the bank's live total ("… · 4,110 in bank") when
+  more entries exist than are loaded. Pure view-model in `ui/js/stats_view.js`.
+
+### 0.2.0
+
+- **Bundled Knowledge Bank Explorer.** The package now ships the explorer UI
+  (`gurucloud_kb/ui`) and serves it locally: `gurucloud-kb ui [--kb ID_OR_NAME]`
+  (new console script; also `python -m gurucloud_kb ui`) or
+  `client.serve_ui(kb)`. A stdlib server proxies the UI's calls through the
+  SDK transport so the API key stays server-side. New public helpers
+  `serve_ui()` / `start_ui_server()` (the latter binds without blocking, for
+  embedding and tests). Works against the hosted API and self-hosted
+  platforms; vendored Cytoscape/dagre make the Map tab work offline.
+- **`kb.list_recent_queries(limit=50)`** (sync + async) — the bank's most
+  recent searches with duration, result count, filters and `query_source`, via
+  the new `GET /banks/{kb}/queries` endpoint. Typed as `RecentQueryList`.
+- Transport: `post/put/patch/delete` accept `params=` (used by the UI proxy).
+
+### 0.1.19
+
+- **Non-destructive playbook edits** — `upsert_playbook()` now leaves
+  `status` and `metadata` out of the request when they are `None` (the new
+  default for `status`, previously `"active"`). The service keeps the stored
+  values for an existing slug and defaults a new playbook to `active` / `{}`,
+  so a read → change-one-step → write round-trip no longer publishes a draft
+  or wipes metadata. Pass `metadata={}` to clear it, or `status=...` to change
+  it. Requires a platform serving the same contract (hosted, or self-hosted
+  image ≥ 1.3.0); older services still treat the absent fields as before.
+- **`delete_playbook(slug, reason=..., changed_by=...)`** — optional audit
+  fields forwarded as query params; the service appends a tombstone version
+  (`deleted: true`, `delete_reason`) so `list_playbook_versions()` still shows
+  what was removed and why. The response gains `tombstone_version`.
 
 ### 0.1.18
 

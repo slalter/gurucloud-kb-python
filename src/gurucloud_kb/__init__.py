@@ -31,6 +31,7 @@ from gurucloud_kb.errors import (
     RateLimitError,
 )
 from gurucloud_kb.kb import KnowledgeBank
+from gurucloud_kb.ui_server import serve_ui, start_ui_server
 from gurucloud_kb.types import (
     Aggregation,
     APIKeyInfo,
@@ -40,6 +41,7 @@ from gurucloud_kb.types import (
     ClusterGroup,
     ClusteringResult,
     ClusterMember,
+    ClusterLabelSample,
     ClusterMemberSample,
     ClusterMethod,
     ClusterOutlierStrategy,
@@ -76,6 +78,8 @@ from gurucloud_kb.types import (
     PlaybookSummary,
     PlaybookVersion,
     PlaybookWriteResult,
+    RecentQuery,
+    RecentQueryList,
 )
 
 __all__ = [
@@ -85,6 +89,9 @@ __all__ = [
     # Async client
     "AsyncGuruCloudClient",
     "AsyncKnowledgeBank",
+    # Explorer UI
+    "serve_ui",
+    "start_ui_server",
     # Errors
     "GuruCloudError",
     "APIError",
@@ -117,6 +124,7 @@ __all__ = [
     "ClusterMethod",
     "ClusterAlgorithm",
     "ClusterOutlierStrategy",
+    "ClusterLabelSample",
     "ClusterMemberSample",
     "ClusterMember",
     "ClusterGroup",
@@ -138,8 +146,10 @@ __all__ = [
     "PlaybookSummary",
     "PlaybookVersion",
     "PlaybookWriteResult",
+    "RecentQuery",
+    "RecentQueryList",
     "LinkedEntry",
     "OverlapCandidate",
 ]
 
-__version__ = "0.1.18"
+__version__ = "0.2.5"

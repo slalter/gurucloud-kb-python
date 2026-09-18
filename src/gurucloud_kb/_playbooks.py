@@ -28,21 +28,29 @@ def upsert_body(
     when_to_use: str,
     steps: list[PlaybookStepInput] | list[dict[str, Any]],
     summary: str,
-    status: PlaybookStatus,
+    status: PlaybookStatus | None,
     supersedes_slug: str | None,
     metadata: dict[str, Any] | None,
     change_note: str,
     changed_by: str | None,
 ) -> dict[str, Any]:
+    """Wire body for PUT /playbooks/{slug}.
+
+    ``status`` / ``metadata`` are sent ONLY when given: the service keeps the
+    stored values for an existing slug when they are absent (and defaults a
+    new playbook to ``active`` / ``{}``). Sending ``{}`` clears metadata.
+    """
     body: dict[str, Any] = {
         "title": title,
         "when_to_use": when_to_use,
         "steps": [dict(step) for step in steps],
         "summary": summary,
-        "status": status,
         "change_note": change_note,
-        "metadata": dict(metadata or {}),
     }
+    if status is not None:
+        body["status"] = status
+    if metadata is not None:
+        body["metadata"] = dict(metadata)
     if supersedes_slug:
         body["supersedes_slug"] = supersedes_slug
     if changed_by:
@@ -52,6 +60,15 @@ def upsert_body(
 
 def force_params(force: bool) -> dict[str, Any]:
     return {"force": "true" if force else "false"}
+
+
+def delete_params(reason: str | None, changed_by: str | None) -> dict[str, Any]:
+    params: dict[str, Any] = {}
+    if reason:
+        params["reason"] = reason
+    if changed_by:
+        params["changed_by"] = changed_by
+    return params
 
 
 def linked_params(include_linked_entries: bool) -> dict[str, Any]:

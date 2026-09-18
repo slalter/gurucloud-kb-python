@@ -64,6 +64,9 @@ class KBInfo(_KBInfoBase, total=False):
     mcp_url: str
     mcp_config: dict[str, Any]
     explore_url: str
+    # list_kbs() only: "owner" for your own banks, "granted" for banks another
+    # user owns that you may use through an MCP-server access grant.
+    access: str
 
 
 # ── Dimension Schema ────────────────────────────────────────────
@@ -282,6 +285,12 @@ into its nearest cluster when it lies within that cluster's own spread;
 ``"subcluster"`` re-clusters the noise into new clusters flagged
 ``from_noise`` so no catch-all bucket remains."""
 
+ClusterLabelSample = Literal["spread", "nearest"]
+"""Which members of a vector cluster the LLM namer is shown when ``label=True``.
+``"spread"`` (service default) samples from the centroid out toward the edge so
+the name covers the whole cluster; ``"nearest"`` shows only the most central
+members (the behaviour before 0.2.3)."""
+
 ClusterMemberSample = Literal["nearest", "diverse"]
 """How a vector cluster's returned members are sampled past
 ``max_members_per_cluster``. ``"nearest"`` (default) returns the members
@@ -304,6 +313,7 @@ class ClusterGroup(TypedDict, total=False):
     cluster_id: int
     size: int
     label: str | None
+    description: str | None  # one sentence on what the cluster holds (label=True only)
     key: str | None  # representative value (fuzzy)
     keywords: list[str]
     representative_entry_ids: list[str]
@@ -506,6 +516,24 @@ class EntryEventLogList(TypedDict, total=False):
     total: int
     limit: int
     offset: int
+
+
+class RecentQuery(TypedDict, total=False):
+    """One logged search against the bank (newest first in a list)."""
+
+    query_text: str
+    duration_ms: float
+    result_count: int
+    filters_used: dict[str, Any]
+    query_source: str | None  # e.g. "agent_query", "playbook_match", "explorer"
+    created_at: str | None
+
+
+class RecentQueryList(TypedDict, total=False):
+    """``list_recent_queries()`` response."""
+
+    queries: list[RecentQuery]
+    limit: int
 
 
 # ── Playbooks ──────────────────────────────────────────────────

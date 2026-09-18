@@ -63,7 +63,14 @@ class GuruCloudClient:
     # ── Knowledge Bank operations ───────────────────────────────
 
     def list_kbs(self) -> list[KBInfo]:
-        """List all Knowledge Banks owned by the authenticated user."""
+        """List every Knowledge Bank the authenticated user can reach.
+
+        Banks you own come first (``access == "owner"``), followed by banks
+        another user owns that you may use through an MCP-server access grant
+        (``access == "granted"``). Every other method works on both kinds by
+        id or exact name; bank settings, schema and deletion need an
+        ``admin``-level grant on a bank you do not own.
+        """
         return self._http.get("/banks")
 
     def get_kb(self, kb_id: str) -> KnowledgeBank:
@@ -247,6 +254,27 @@ class GuruCloudClient:
         return self._http.delete(f"/api-keys/{key_id}")
 
     # ── lifecycle ───────────────────────────────────────────────
+
+    # ── Explorer UI ─────────────────────────────────────────────
+
+    def serve_ui(
+        self,
+        kb: str | None = None,
+        *,
+        host: str = "127.0.0.1",
+        port: int = 8765,
+        open_browser: bool = True,
+    ) -> None:
+        """Open the bundled Knowledge Bank Explorer in a browser (blocks).
+
+        Serves the UI from this package on localhost and proxies its API calls
+        through this client, so the API key never leaves the machine. ``kb`` is
+        a bank id or exact name; omit it to choose from a list. Same as
+        ``gurucloud-kb ui`` on the command line.
+        """
+        from gurucloud_kb.ui_server import serve_ui
+
+        serve_ui(self, kb, host=host, port=port, open_browser=open_browser)
 
     def close(self) -> None:
         """Close the underlying HTTP connection pool."""

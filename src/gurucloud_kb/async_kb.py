@@ -13,11 +13,13 @@ from gurucloud_kb.types import (
     BatchIngestResult,
     ClusterAlgorithm,
     ClusteringResult,
+    ClusterLabelSample,
     ClusterMemberSample,
     ClusterMethod,
     ClusterOutlierStrategy,
     DeduplicationEvent,
     DeduplicationEventList,
+    RecentQueryList,
     DimensionConfig,
     DimensionSchema,
     EntryEventLogList,
@@ -307,6 +309,8 @@ class AsyncKnowledgeBank:
         method: ClusterMethod = "auto",
         algorithm: ClusterAlgorithm = "auto",
         k: int | None = None,
+        target_cluster_size: int | None = None,
+        peel_misfits: bool = False,
         min_cluster_size: int = 5,
         max_cluster_size: int | None = None,
         max_cluster_fraction: float | None = None,
@@ -320,7 +324,8 @@ class AsyncKnowledgeBank:
         max_members_per_cluster: int = 10,
         member_sample: ClusterMemberSample = "nearest",
         label: bool = False,
-        label_sample_size: int = 5,
+        label_sample_size: int | None = None,
+        label_sample: ClusterLabelSample | None = None,
     ) -> ClusteringResult:
         """Group the KB's entries by one or more fields (async).
 
@@ -350,7 +355,6 @@ class AsyncKnowledgeBank:
             "include_members": include_members,
             "max_members_per_cluster": max_members_per_cluster,
             "label": label,
-            "label_sample_size": label_sample_size,
         }
         if fields is not None:
             body["fields"] = list(fields)
@@ -365,6 +369,14 @@ class AsyncKnowledgeBank:
             body["outlier_strategy"] = outlier_strategy
         if reassign_percentile is not None:
             body["reassign_percentile"] = reassign_percentile
+        if target_cluster_size is not None:
+            body["target_cluster_size"] = target_cluster_size
+        if peel_misfits:
+            body["peel_misfits"] = True
+        if label_sample_size is not None:
+            body["label_sample_size"] = label_sample_size
+        if label_sample is not None:
+            body["label_sample"] = label_sample
         if member_sample != "nearest":
             body["member_sample"] = member_sample
         if search is not None:
@@ -483,19 +495,22 @@ class AsyncKnowledgeBank:
         when_to_use: str,
         steps: list[PlaybookStepInput] | list[dict[str, Any]],
         summary: str = "",
-        status: PlaybookStatus = "active",
+        status: PlaybookStatus | None = None,
         supersedes_slug: str | None = None,
         metadata: dict[str, Any] | None = None,
         change_note: str = "",
         changed_by: str | None = None,
         force: bool = False,
     ) -> PlaybookWriteResult:
-        """Create or fully replace the playbook at ``slug`` (versioned).
+        """Create or update the playbook at ``slug`` (versioned).
 
         ``when_to_use`` is what matching runs on — phrase it the way an agent
         would describe its task. ``steps`` are replaced wholesale; positions
-        come from list order. Every write snapshots the full playbook into its
-        version history.
+        come from list order. ``status`` and ``metadata`` are preserve-on-absent:
+        left as ``None`` they keep the stored values on an existing playbook
+        (a new one defaults to ``"active"`` / ``{}``); pass ``metadata={}`` to
+        clear it. Every write snapshots the full playbook into its version
+        history.
 
         The bank keeps one playbook per task: a write whose ``when_to_use``
         overlaps another ACTIVE playbook raises :class:`PlaybookOverlapError`
@@ -508,9 +523,13 @@ class AsyncKnowledgeBank:
         )
         return await self._http.put(self._path(f"/playbooks/{slug}") + _qs(_pb.force_params(force)), json=body)
 
-    async def delete_playbook(self, slug: str) -> dict[str, Any]:
-        """Hard-delete a playbook. Its version snapshots are retained."""
-        return await self._http.delete(self._path(f"/playbooks/{slug}"))
+    async def delete_playbook(
+        self, slug: str, *, reason: str | None = None, changed_by: str | None = None
+    ) -> dict[str, Any]:
+        """Hard-delete a playbook. Its version snapshots are retained and a
+        tombstone version carrying ``reason`` / ``changed_by`` is appended, so
+        :meth:`list_playbook_versions` still shows what was removed and why."""
+        return await self._http.delete(self._path(f"/playbooks/{slug}") + _pb.qs(_pb.delete_params(reason, changed_by)))
 
     async def list_playbook_versions(self, slug: str) -> list[PlaybookVersion]:
         """Version history for a playbook, newest first (full snapshots)."""
@@ -627,6 +646,11 @@ class AsyncKnowledgeBank:
     async def get_stats(self) -> dict[str, Any]:
         """Get performance statistics."""
         return await self._http.get(self._path("/stats"))
+
+    async def list_recent_queries(self, *, limit: int = 50) -> RecentQueryList:
+        """The most recent searches run against this bank, newest first
+        (see :meth:`gurucloud_kb.KnowledgeBank.list_recent_queries`)."""
+        return await self._http.get(self._path("/queries"), params={"limit": limit})
 
     # ── dunder ──────────────────────────────────────────────────
 

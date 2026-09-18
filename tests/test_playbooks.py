@@ -123,11 +123,38 @@ class TestSyncPlaybooks:
             "when_to_use": "hourly filing of cards",
             "steps": [{"title": "one", "body": "b1"}, {"title": "two", "body": "b2", "kb_entry_id": "e-2"}],
             "summary": "",
-            "status": "active",
             "change_note": "init",
             "metadata": {"board": "x"},
             "supersedes_slug": "old-sweep",
         }
+        assert "status" not in body  # None -> omitted -> service keeps / defaults it
+
+    def test_upsert_omits_status_and_metadata_when_none_and_sends_explicit_values(self, kb) -> None:
+        """Preserve-on-absent on the wire: a step-only edit must not carry
+        status='active' / metadata={} (that wiped metadata and published
+        drafts server-side); explicit values — including {} — are sent."""
+        route = respx.put(f"{API_PREFIX}/banks/kb-1/playbooks/pm-sweep").mock(
+            return_value=httpx.Response(200, json={"data": {"action": "updated", "playbook": PLAYBOOK}})
+        )
+        kb.upsert_playbook("pm-sweep", title="PM sweep", when_to_use="hourly filing of cards", steps=[{"title": "a", "body": "b"}])
+        body = json.loads(route.calls.last.request.content)
+        assert "status" not in body and "metadata" not in body
+        kb.upsert_playbook(
+            "pm-sweep", title="PM sweep", when_to_use="hourly filing of cards", steps=[{"title": "a", "body": "b"}],
+            status="draft", metadata={},
+        )
+        body = json.loads(route.calls.last.request.content)
+        assert body["status"] == "draft" and body["metadata"] == {}
+
+    def test_delete_forwards_reason_and_changed_by(self, kb) -> None:
+        route = respx.delete(f"{API_PREFIX}/banks/kb-1/playbooks/pm-sweep").mock(
+            return_value=httpx.Response(200, json={"data": {"deleted": True, "slug": "pm-sweep", "tombstone_version": 4}})
+        )
+        out = kb.delete_playbook("pm-sweep", reason="duplicate of pm-hourly", changed_by="user:u1")
+        assert out["tombstone_version"] == 4
+        assert dict(route.calls.last.request.url.params) == {"reason": "duplicate of pm-hourly", "changed_by": "user:u1"}
+        kb.delete_playbook("pm-sweep")
+        assert dict(route.calls.last.request.url.params) == {}
 
     def test_upsert_overlap_raises_typed_error(self, kb) -> None:
         respx.put(f"{API_PREFIX}/banks/kb-1/playbooks/pm-sweep-2").mock(return_value=httpx.Response(409, json=OVERLAP))
@@ -171,8 +198,15 @@ class TestAsyncPlaybooks:
                 assert len(pb["steps"]) == 2
                 res = await kb.upsert_playbook("pm-sweep", title="PM sweep", when_to_use="hourly filing of cards", steps=[{"title": "a", "body": "b"}])
                 assert res["action"] == "updated"
-                assert json.loads(put_route.calls.last.request.content)["steps"] == [{"title": "a", "body": "b"}]
+                put_body = json.loads(put_route.calls.last.request.content)
+                assert put_body["steps"] == [{"title": "a", "body": "b"}]
+                assert "status" not in put_body and "metadata" not in put_body
                 assert dict(put_route.calls.last.request.url.params) == {"force": "false"}
+                del_route = respx.delete(f"{API_PREFIX}/banks/kb-1/playbooks/pm-sweep").mock(
+                    return_value=httpx.Response(200, json={"data": {"deleted": True, "slug": "pm-sweep", "tombstone_version": 3}})
+                )
+                assert (await kb.delete_playbook("pm-sweep", reason="duplicate of pm-hourly"))["tombstone_version"] == 3
+                assert dict(del_route.calls.last.request.url.params) == {"reason": "duplicate of pm-hourly"}
                 with pytest.raises(PlaybookOverlapError) as exc:
                     await kb.upsert_playbook("dup", title="t", when_to_use="hourly filing", steps=[{"title": "a", "body": "b"}])
                 assert exc.value.candidates[0]["slug"] == "pm-sweep"

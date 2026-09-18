@@ -7,6 +7,7 @@ Uses respx to mock the HTTP layer and asserts the request body the SDK builds
 from __future__ import annotations
 
 import json
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -17,6 +18,12 @@ from gurucloud_kb import AsyncGuruCloudClient, GuruCloudClient
 BASE_URL = "https://test.gurucloudai.com"
 API_PREFIX = f"{BASE_URL}/api/v1/kb"
 API_KEY = "kb_test_key_abc123"
+
+
+def _raw(payload: object) -> dict[str, Any]:
+    """View a typed response as the raw JSON dict it is (every key is
+    NotRequired on the wire types, so plain indexing is a pyright error)."""
+    return cast(dict[str, Any], payload)
 
 KB_INFO = {
     "kb_id": "test-kb-uuid",
@@ -57,9 +64,10 @@ def test_cluster_sync_sends_params_and_returns_results() -> None:
 
     result = kb.cluster(fields=["content"], algorithm="kmeans", k=2)
 
-    assert result["scope"]["entry_count"] == 42
-    assert result["results"][0]["field"] == "content"
-    assert result["results"][0]["method"] == "vector"
+    raw = _raw(result)
+    assert raw["scope"]["entry_count"] == 42
+    assert raw["results"][0]["field"] == "content"
+    assert raw["results"][0]["method"] == "vector"
 
     sent = json.loads(route.calls[0].request.content)
     assert sent["fields"] == ["content"]
@@ -88,7 +96,8 @@ def test_cluster_sync_defaults_and_omits_k() -> None:
     assert "fields" not in sent
     assert sent["method"] == "auto"
     assert sent["label"] is False
-    assert sent["label_sample_size"] == 5  # default representative cap
+    # naming knobs are left to the service unless asked (0.2.3: used to force 5)
+    assert "label_sample_size" not in sent and "label_sample" not in sent
     assert "k" not in sent  # None -> omitted so the service auto-selects
 
 
@@ -154,7 +163,7 @@ async def test_cluster_async_multi_field() -> None:
     result = await kb.cluster(fields=["content", "metadata.customer"])
     await client.close()
 
-    assert result["scope"]["entry_count"] == 5
+    assert _raw(result)["scope"]["entry_count"] == 5
     sent = json.loads(route.calls[0].request.content)
     assert sent["fields"] == ["content", "metadata.customer"]
 
@@ -327,3 +336,60 @@ async def test_cluster_async_forwards_reassign_percentile() -> None:
 
     sent = json.loads(route.calls[0].request.content)
     assert sent["reassign_percentile"] == 80.5
+
+
+_EMPTY = {"data": {"scope": {"source": "all", "entry_count": 0}, "results": []}}
+
+
+@respx.mock
+def test_cluster_sync_target_cluster_size_sent_only_when_given() -> None:
+    respx.get(f"{API_PREFIX}/banks/test-kb-uuid").mock(return_value=httpx.Response(200, json={"data": KB_INFO}))
+    kb = GuruCloudClient(api_key=API_KEY, base_url=BASE_URL).get_kb("test-kb-uuid")
+    route = respx.post(f"{API_PREFIX}/banks/test-kb-uuid/cluster").mock(return_value=httpx.Response(200, json=_EMPTY))
+
+    kb.cluster()
+    assert "target_cluster_size" not in json.loads(route.calls[0].request.content)  # service default applies
+
+    kb.cluster(target_cluster_size=20, max_members_per_cluster=5000)
+    sent = json.loads(route.calls[1].request.content)
+    assert sent["target_cluster_size"] == 20
+    assert sent["max_members_per_cluster"] == 5000  # no client-side ceiling
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_cluster_async_target_cluster_size() -> None:
+    respx.get(f"{API_PREFIX}/banks/test-kb-uuid").mock(return_value=httpx.Response(200, json={"data": KB_INFO}))
+    route = respx.post(f"{API_PREFIX}/banks/test-kb-uuid/cluster").mock(return_value=httpx.Response(200, json=_EMPTY))
+    client = AsyncGuruCloudClient(api_key=API_KEY, base_url=BASE_URL)
+    kb = await client.get_kb("test-kb-uuid")
+    await kb.cluster(target_cluster_size=50)
+    assert json.loads(route.calls[0].request.content)["target_cluster_size"] == 50
+    await client.close()
+
+
+@respx.mock
+def test_cluster_sync_forwards_label_sample() -> None:
+    respx.get(f"{API_PREFIX}/banks/test-kb-uuid").mock(return_value=httpx.Response(200, json={"data": KB_INFO}))
+    kb = GuruCloudClient(api_key=API_KEY, base_url=BASE_URL).get_kb("test-kb-uuid")
+    route = respx.post(f"{API_PREFIX}/banks/test-kb-uuid/cluster").mock(return_value=httpx.Response(200, json=_EMPTY))
+    kb.cluster(label=True, label_sample="nearest", label_sample_size=300)
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["label_sample"] == "nearest" and sent["label_sample_size"] == 300
+    assert "peel_misfits" not in sent  # opt-in
+    kb.cluster(peel_misfits=True, outlier_strategy="subcluster")
+    sent = json.loads(route.calls[1].request.content)
+    assert sent["peel_misfits"] is True and sent["outlier_strategy"] == "subcluster"
+
+
+@respx.mock
+def test_cluster_sync_star_field_and_description_passthrough() -> None:
+    respx.get(f"{API_PREFIX}/banks/test-kb-uuid").mock(return_value=httpx.Response(200, json={"data": KB_INFO}))
+    kb = GuruCloudClient(api_key=API_KEY, base_url=BASE_URL).get_kb("test-kb-uuid")
+    payload = {"data": {"scope": {"source": "all", "entry_count": 2}, "results": [
+        {"field": "*", "method": "vector", "cluster_count": 1, "clustered_count": 2, "noise_count": 0,
+         "clusters": [{"cluster_id": 0, "size": 2, "label": "Dev VM Lifecycle", "description": "Launch, stop and lease handling."}]}]}}
+    route = respx.post(f"{API_PREFIX}/banks/test-kb-uuid/cluster").mock(return_value=httpx.Response(200, json=payload))
+    out = kb.cluster(fields=["*"], label=True)
+    assert json.loads(route.calls[0].request.content)["fields"] == ["*"]
+    assert _raw(out)["results"][0]["clusters"][0]["description"] == "Launch, stop and lease handling."
