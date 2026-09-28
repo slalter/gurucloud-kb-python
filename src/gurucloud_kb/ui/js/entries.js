@@ -11,6 +11,7 @@ import { h, mount, clear, toast, skeleton, empty, meter } from './dom.js';
 import { openEntryDetail, openAddModal, kindChip, dimensionRow } from './entry_detail.js';
 import { semanticDims, textOnlyDims, kindDim, knownValues, observedValues, kindOf, truncate } from './schema_utils.js';
 import { entriesCountLabel } from './stats_view.js';
+import { buildExpandedPayload, expansionSummary, readLlmSearchPref, readSpeedPref, writeLlmSearchPref, writeSpeedPref } from './llm_search.js';
 
 export function createEntriesView(ctx) {
   const { api } = ctx;
@@ -22,6 +23,7 @@ export function createEntriesView(ctx) {
   let activeChip = null; // { dim, value } | { category } | null
 
   const resultsHost = h('div', {});
+  const expansionHost = h('div', {});
   const countLabel = h('div', { class: 'kbx-muted', style: { fontSize: '13px' } }, '');
   const chipsHost = h('div', { class: 'kbx-filter-chips', style: { marginBottom: '12px' } });
 
@@ -34,6 +36,32 @@ export function createEntriesView(ctx) {
     h('option', { value: 'min' }, 'All must match'));
   const limitInput = h('input', { class: 'kbx-input', type: 'number', min: '1', max: '200', value: '20' });
   const thresholdInput = h('input', { class: 'kbx-input', type: 'number', min: '0', max: '1', step: '0.05', value: '0' });
+
+  // LLM-powered search (expanded search): off by default, remembered per bank.
+  function storage() { try { return window.localStorage; } catch { return null; } }
+  const llmCb = h('input', { type: 'checkbox' });
+  llmCb.checked = readLlmSearchPref(storage(), api.kbId);
+  const llmInput = h('input', { class: 'kbx-input', type: 'text', placeholder: 'Describe what you are looking for…' });
+  llmInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') runSearch(); });
+  const speedSelect = h('select', { class: 'kbx-select', title: 'Fast: about 1 second. Thorough: about 3 seconds, a larger model that reasons first. Quality measured equal within noise.' },
+    h('option', { value: 'fast' }, 'Fast'),
+    h('option', { value: 'thorough' }, 'Thorough'));
+  speedSelect.value = readSpeedPref(storage(), api.kbId);
+  speedSelect.addEventListener('change', () => writeSpeedPref(storage(), api.kbId, speedSelect.value));
+  const llmField = h('div', { class: 'kbx-row', style: { alignItems: 'flex-end', gap: '10px' } },
+    h('div', { class: 'kbx-field', style: { marginBottom: 0, flex: '1 1 auto' } },
+      h('label', {}, 'Query', h('span', { class: 'kbx-chip muted', style: { marginLeft: '6px' } }, 'LLM fills every dimension')),
+      llmInput),
+    h('div', { class: 'kbx-field', style: { marginBottom: 0, width: '130px' } }, h('label', {}, 'Speed'), speedSelect));
+  const modeField = h('div', { class: 'kbx-field', style: { marginBottom: 0 } }, h('label', {}, 'Mode'), modeSelect);
+  function applyLlmMode() {
+    const on = llmCb.checked;
+    searchInputs.style.display = on ? 'none' : '';
+    llmField.style.display = on ? '' : 'none';
+    modeField.style.display = on ? 'none' : '';
+    if (!on) clear(expansionHost);
+  }
+  llmCb.addEventListener('change', () => { writeLlmSearchPref(storage(), api.kbId, llmCb.checked); applyLlmMode(); });
 
   function buildSearchInputs() {
     const schema = ctx.getSchema();
@@ -63,6 +91,7 @@ export function createEntriesView(ctx) {
   const clearBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', onClick: () => {
     searchInputs.querySelectorAll('input').forEach((i) => (i.value = ''));
     filterInputs.querySelectorAll('select').forEach((s) => (s.value = ''));
+    llmInput.value = ''; clear(expansionHost);
     activeChip = null; loadEntries();
   } }, 'Clear');
   const addBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', onClick: () => openAddModal(ctx, lastResults, loadEntries) }, h('i', { class: 'bi bi-plus-lg' }), 'Add entry');
@@ -70,19 +99,24 @@ export function createEntriesView(ctx) {
   const searchCard = h('div', { class: 'kbx-card' },
     h('div', { class: 'kbx-card-head' }, h('h3', { class: 'kbx-card-title' }, 'Semantic search'),
       h('div', { class: 'kbx-row' },
-        h('div', { class: 'kbx-field', style: { marginBottom: 0 } }, h('label', {}, 'Mode'), modeSelect),
+        h('div', { class: 'kbx-field', style: { marginBottom: 0 } }, h('label', {}, '\u00a0'),
+          h('label', { class: 'kbx-check', title: 'A small language model reads what each dimension of this bank is for, writes a search for each one from your query, and searches them together. Costs one model call per new query; falls back to the plain search if the model is unavailable.' }, llmCb, 'LLM-powered search')),
+        modeField,
         h('div', { class: 'kbx-field', style: { marginBottom: 0, width: '80px' } }, h('label', {}, 'Limit'), limitInput),
         h('div', { class: 'kbx-field', style: { marginBottom: 0, width: '90px' } }, h('label', {}, 'Min score'), thresholdInput))),
     searchInputs,
+    llmField,
     filterInputs,
     h('div', { class: 'kbx-row kbx-mt' }, searchBtn, clearBtn));
 
   const listCard = h('div', { class: 'kbx-card' },
     h('div', { class: 'kbx-card-head' }, countLabel, addBtn),
+    expansionHost,
     chipsHost,
     resultsHost);
 
   mount(el, searchCard, listCard);
+  applyLlmMode();
 
   // ── loading ──────────────────────────────────────────────────────────────
   function limitVal(max) { return Math.max(1, Math.min(parseInt(limitInput.value, 10) || 20, max)); }
@@ -107,7 +141,45 @@ export function createEntriesView(ctx) {
     return filters;
   }
 
+  async function runLlmSearch() {
+    const payload = buildExpandedPayload({ query: llmInput.value, k: limitVal(100), threshold: parseFloat(thresholdInput.value) || 0, filters: currentFilters(), speed: speedSelect.value });
+    if (!payload) { clear(expansionHost); loadEntries(); return; }
+    if (searching) return;
+    searching = true; searchBtn.classList.add('is-loading');
+    clear(expansionHost);
+    mount(resultsHost, skeleton('Asking the model, then searching…'));
+    try {
+      const data = await api.searchExpanded(payload);
+      lastResults = (data && Array.isArray(data.results)) ? data.results : [];
+      renderExpansion(data ? data.expansion : null);
+      showingScores = true; activeChip = null;
+      render();
+    } catch (e) {
+      mount(resultsHost, h('div', { class: 'kbx-alert danger' }, `Search failed: ${e.message}`));
+    } finally {
+      searching = false; searchBtn.classList.remove('is-loading');
+    }
+  }
+
+  function renderExpansion(expansion) {
+    const sum = expansionSummary(expansion);
+    const box = h('div', { class: `kbx-alert ${sum.tone}`, style: { marginBottom: '12px', display: 'block' } },
+      h('div', { style: { fontWeight: '600', marginBottom: sum.rows.length || sum.descriptors.length ? '6px' : '0' } }, sum.headline));
+    if (sum.rows.length) {
+      const list = h('div', { class: 'kbx-grid cols-2', style: { gap: '4px 16px' } });
+      sum.rows.forEach((r) => list.append(h('div', {}, h('span', { class: 'kbx-chip muted', style: { marginRight: '6px' } }, r.dimension), r.text)));
+      box.append(list);
+    }
+    if (sum.descriptors.length) {
+      box.append(h('div', { style: { marginTop: '6px' } }, h('span', { class: 'kbx-muted' }, 'Also: '), sum.descriptors.join(', ')));
+    }
+    if (sum.footnote) box.append(h('div', { class: 'kbx-muted', style: { fontSize: '12px', marginTop: '6px' } }, sum.footnote));
+    mount(expansionHost, box);
+  }
+
   async function runSearch() {
+    if (llmCb.checked) { await runLlmSearch(); return; }
+    clear(expansionHost);
     const dimensions = {};
     searchInputs.querySelectorAll('input[data-dim]').forEach((i) => {
       const val = i.value.trim();

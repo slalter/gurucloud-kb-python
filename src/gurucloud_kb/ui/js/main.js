@@ -131,9 +131,11 @@ export function bootExplorer(root) {
 
   // ── go ─────────────────────────────────────────────────────────────────────
   renderTiles({}, null);
-  refreshInfo();
   const initial = (location.hash || '').replace('#', '');
-  activate(PANELS.some((p) => p.id === initial) ? initial : 'entries');
+  // Open the first tab only once the bank's schema is known: views build their
+  // inputs from ctx.getSchema() on first load, and a custom-schema bank would
+  // otherwise render the default dimensions (refreshInfo never rejects).
+  refreshInfo().then(() => activate(PANELS.some((p) => p.id === initial) ? initial : 'entries'));
   return ctx;
 }
 

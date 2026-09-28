@@ -638,3 +638,85 @@ class OverlapCandidate(TypedDict, total=False):
     title: str
     when_to_use: str
     similarity: float
+
+
+# ── Expanded search + client credentials (0.3.0) ────────────────
+
+
+CredentialProvider = Literal["openai", "azure_openai"]
+"""Model-provider API family a client credential belongs to. Both speak the
+OpenAI-compatible chat API; ``"azure_openai"`` needs a ``base_url`` of the form
+``https://<resource>.openai.azure.com/openai/v1`` and uses deployment names as
+models."""
+
+CredentialSource = Literal["bank", "owner", "platform", "env"]
+"""Which credential paid for a model call: a bank-scoped credential of yours,
+your owner-wide credential, the platform-wide credential (self-hosted), or the
+platform's own environment key (``env`` — the platform paid)."""
+
+ExpansionSpeed = Literal["fast", "thorough"]
+"""Expanded-search preset. ``"fast"`` (default): the platform's fast model,
+no reasoning, 2.5 s limit (about 0.8 s typical). ``"thorough"``: the cheap
+model with low reasoning, 6 s limit (about 3 s typical). Quality measured
+equal within noise on the platform's truth set."""
+
+ReasoningEffort = Literal["none", "minimal", "low", "medium", "high"]
+
+ExpansionStatus = Literal[
+    "expanded", "cached", "empty", "disabled", "unconfigured", "timeout", "error"
+]
+"""What the expansion step did. Everything but ``expanded`` / ``cached``
+means the results came from the raw single-dimension search:
+``empty`` (the model found nothing to add), ``disabled`` (``expand=False``),
+``unconfigured`` (no credential and no platform key), ``timeout``, ``error``."""
+
+
+class ClientCredentialInfo(TypedDict, total=False):
+    """A stored client credential — never carries the key itself."""
+
+    id: str
+    owner_scope: str
+    kb_id: str | None
+    provider: CredentialProvider
+    label: str | None
+    base_url: str | None
+    default_model: str | None
+    key_fingerprint: str  # sha256 prefix of the key: "is this the key I think it is"
+    key_hint: str  # "...abcd" — last four characters
+    created_at: str
+    updated_at: str
+    last_used_at: str | None
+
+
+class CredentialStoreStatus(TypedDict, total=False):
+    """``client.credentials.status()``."""
+
+    configured: bool
+    key_fingerprint: str | None
+
+
+class ExpansionInfo(TypedDict, total=False):
+    """How the model expanded one search (``ExpandedSearchResult["expansion"]``)."""
+
+    status: ExpansionStatus
+    speed: ExpansionSpeed | None
+    model: str | None
+    reasoning_effort: str | None  # the reasoning value actually sent, if any
+    credential_source: CredentialSource | None
+    dimensions: dict[str, str]  # dimension name -> text the model searched there
+    descriptors: list[str]
+    content_query: str  # the text searched in the primary content dimension
+    content_dimension: str
+    duration_ms: float
+    input_tokens: int
+    output_tokens: int
+    error: str | None
+    expansion_id: str | None  # audit row id on the platform
+
+
+class ExpandedSearchResult(TypedDict, total=False):
+    """``kb.search_expanded(...)`` response."""
+
+    results: list[SearchResult]
+    expansion: ExpansionInfo
+    search_request: dict[str, Any]  # the effective multi-dimensional request that ran

@@ -236,3 +236,12 @@ def test_server_rejects_unknown_paths_and_methods(server):
         assert False, "expected 405"
     except HTTPError as e:
         assert e.code == 405
+
+
+
+def test_translate_routes_expanded_search_to_the_sdk_contract() -> None:
+    """The Explorer's LLM-powered search posts /search/expanded; the proxy maps it generically."""
+    from gurucloud_kb.ui_server import translate
+
+    t = translate("POST", "Games", "/search/expanded")
+    assert (t.method, t.path) == ("POST", "/banks/Games/search/expanded")

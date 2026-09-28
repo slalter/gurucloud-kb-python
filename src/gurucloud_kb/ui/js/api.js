@@ -104,6 +104,7 @@ export function createApi(kbId, base, opts = {}) {
     deleteEntry: (id) => req('DELETE', `/entries/${encodeURIComponent(id)}`),
     // search + cluster
     search: (payload) => req('POST', '/search', { body: payload }),
+    searchExpanded: (payload) => req('POST', '/search/expanded', { body: payload }),
     cluster: (payload) => req('POST', '/cluster', { body: payload }),
     // assertions
     listAssertions: (params) => req('GET', '/assertions', { params }),

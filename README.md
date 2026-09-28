@@ -325,6 +325,74 @@ The SDK also accepts the older spellings `query` (per dimension) and
 `filters` (top level) and rewrites them to `query_text` / `metadata_filters`
 for you — but prefer the canonical names above.
 
+### Expanded search — let a model fill the bank's dimensions
+
+`kb.search_expanded(query)` has a small model read the bank's dimension
+**descriptions** and write the search text each dimension implies for the
+query, plus short descriptors. The platform then searches the raw query +
+descriptors in the primary content dimension (weight 3.0), every filled
+dimension at its schema weight, and the lexical arm on the raw words (so
+titles and identifiers stay findable). On a 47-query product-search truth
+set this took nDCG@10 from 0.60 (raw) to 0.81.
+
+```python
+out = kb.search_expanded("td", k=10, metadata_filters={"published": True})
+
+out["results"]                    # ranked entries, same shape as kb.search()
+out["expansion"]["status"]        # "expanded" | "cached" | "empty" | "disabled" | "unconfigured" | "timeout" | "error"
+out["expansion"]["dimensions"]    # {"genre": "tower defense", "mechanics": "place towers, ..."}
+out["expansion"]["content_query"] # "td. tower defense, place towers along a path"
+out["expansion"]["credential_source"]  # "bank" | "owner" | "platform" | "env" — who paid for the model call
+out["search_request"]             # the effective multi-dimensional request that ran
+```
+
+It is never worse than `kb.search()`: when the model step cannot run (no
+credential, the time limit exceeded, provider error) the raw search runs
+and `expansion.status` says why.
+
+`speed` picks a preset. Quality was equal within noise on the platform's
+53-query truth set; they differ in time:
+
+| `speed` | Model | Reasoning | Limit | Typical |
+|---|---|---|---|---|
+| `"fast"` (default) | platform fast model (gpt-5.4-nano) | none | 2.5 s | ~0.8 s |
+| `"thorough"` | platform cheap model (gpt-6-luna) | low | 6 s | ~3 s |
+
+Other options: `content_weight` (3.0), `lexical` (True), `model`,
+`reasoning_effort` and `timeout_seconds` (override the preset), `context` (extra guidance
+about the corpus or the searcher), `exclude_dimensions`, `use_cache`,
+`expand=False` (raw search through the same endpoint, for A/B), plus the
+time-window bounds of `search()`. The dimension descriptions are what the
+model reads — write them in the vocabulary you want searched.
+
+The model call is billed to **your** provider account when you have stored
+a credential (below), otherwise to the platform.
+
+### Client credentials — pay for model calls with your own key
+
+```python
+client.credentials.set("openai", api_key="sk-...", default_model="gpt-5.4-mini")
+
+# Azure OpenAI: base_url is required; default_model is the deployment name
+client.credentials.set(
+    "azure_openai", api_key="...",
+    base_url="https://my-resource.openai.azure.com/openai/v1",
+    default_model="gpt-5.5",
+    kb="Games",            # optional: only for this bank (overrides the owner-wide one)
+)
+
+client.credentials.list()          # never returns the key: fingerprint + last four chars
+client.credentials.delete("openai")
+client.credentials.status()        # {"configured": True, ...} — the platform can store keys
+```
+
+Keys are encrypted at rest on the platform and sent once over TLS. Storing a
+credential needs `admin` scope on the hosted API; on a self-hosted platform
+the operator must set `KB_CREDENTIALS_ENCRYPTION_KEY` (otherwise `set()`
+raises `APIError` 503 `credential_store_unconfigured`). Resolution order when
+a search runs: the bank-scoped credential, your owner-wide credential, the
+platform's own key.
+
 ---
 
 ## Cluster entries
@@ -689,6 +757,32 @@ from gurucloud_kb import (
 ---
 
 ## Changelog
+
+### 0.3.0
+
+- **Expanded search speed presets.** `speed="fast"` (default, ~0.8 s) or
+  `"thorough"` (~3 s), plus `reasoning_effort` and `timeout_seconds`
+  overrides; `expansion.speed` / `expansion.reasoning_effort` report what ran.
+- **Expanded search.** `kb.search_expanded(query, ...)` (sync + async): a
+  small model reads the bank's dimension descriptions and fills one query per
+  dimension; the platform searches the raw query + descriptors in the content
+  dimension (weight 3.0), every filled dimension at its schema weight, and the
+  lexical arm on the raw words. Returns `{"results", "expansion",
+  "search_request"}`; `expansion.status` reports fallbacks, so it is never
+  worse than `search()`. Needs kb-platform >= 1.4.0 self-hosted.
+- **Client credentials.** `client.credentials.set / list / delete / status`
+  (sync + async) store your own OpenAI or Azure OpenAI key, encrypted on the
+  platform, so expanded search bills your account; optional per-bank scope
+  (`kb=`). Listings carry a fingerprint and hint, never the key.
+- **Explorer: "LLM-powered search" toggle.** The Entries search card has an
+  off-by-default checkbox, remembered per bank. When it is on, one query box
+  goes to `/search/expanded`, and a panel shows what the model searched in each
+  dimension, which key paid, and why it fell back to the plain search when it
+  did. Works on every host: `gurucloud-kb ui`, the hosted Explorer, and the
+  self-hosted platform `/ui`.
+- New typed contracts: `ExpandedSearchResult`, `ExpansionInfo`,
+  `ExpansionStatus`, `ClientCredentialInfo`, `CredentialProvider`,
+  `CredentialSource`, `CredentialStoreStatus`.
 
 ### 0.2.6
 

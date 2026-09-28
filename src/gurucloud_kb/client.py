@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
+from gurucloud_kb._credentials import ClientCredentials
 from gurucloud_kb._http import HTTPClient
 from gurucloud_kb.kb import KnowledgeBank
 from gurucloud_kb.types import (
@@ -253,6 +254,19 @@ class GuruCloudClient:
         """Delete an API key."""
         return self._http.delete(f"/api-keys/{key_id}")
 
+    # ── client credentials ──────────────────────────────────────
+
+    @property
+    def credentials(self) -> ClientCredentials:
+        """Your own model-provider keys, stored encrypted on the platform.
+
+        ``client.credentials.set("openai", api_key=...)`` makes expanded
+        search (:meth:`~gurucloud_kb.kb.KnowledgeBank.search_expanded`) bill
+        your provider account instead of the platform's. See
+        :class:`~gurucloud_kb._credentials.ClientCredentials`.
+        """
+        return ClientCredentials(self._http)
+
     # ── lifecycle ───────────────────────────────────────────────
 
     # ── Explorer UI ─────────────────────────────────────────────
@@ -274,7 +288,12 @@ class GuruCloudClient:
         """
         from gurucloud_kb.ui_server import serve_ui
 
-        serve_ui(self, kb, host=host, port=port, open_browser=open_browser)
+        # ``serve_ui`` annotates ``client`` with ``gurucloud_kb.client.GuruCloudClient``.
+        # The repo-root PR pyright step installs the SDK into site-packages and
+        # then checks this file BY PATH, so the annotation resolves to the
+        # installed copy of this class and pyright rejects ``self`` as a
+        # different class of the same name. The cast is only for that run.
+        serve_ui(cast(Any, self), kb, host=host, port=port, open_browser=open_browser)
 
     def close(self) -> None:
         """Close the underlying HTTP connection pool."""

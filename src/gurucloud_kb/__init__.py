@@ -19,6 +19,7 @@ Example::
 
 from gurucloud_kb.async_client import AsyncGuruCloudClient
 from gurucloud_kb.async_kb import AsyncKnowledgeBank
+from gurucloud_kb._credentials import AsyncClientCredentials, ClientCredentials
 from gurucloud_kb.client import GuruCloudClient
 from gurucloud_kb.errors import (
     APIError,
@@ -48,6 +49,15 @@ from gurucloud_kb.types import (
     ClusterScope,
     FieldClusterResult,
     CategoryFilter,
+    ClientCredentialInfo,
+    CredentialProvider,
+    CredentialSource,
+    CredentialStoreStatus,
+    ExpandedSearchResult,
+    ExpansionInfo,
+    ExpansionSpeed,
+    ExpansionStatus,
+    ReasoningEffort,
     LexicalOptions,
     CombinationMode,
     DeduplicationEvent,
@@ -89,6 +99,9 @@ __all__ = [
     # Async client
     "AsyncGuruCloudClient",
     "AsyncKnowledgeBank",
+    # Client credentials
+    "ClientCredentials",
+    "AsyncClientCredentials",
     # Explorer UI
     "serve_ui",
     "start_ui_server",
@@ -110,6 +123,15 @@ __all__ = [
     "CategoryConfig",
     "CategoryFilter",
     "LexicalOptions",
+    "ClientCredentialInfo",
+    "CredentialProvider",
+    "CredentialSource",
+    "CredentialStoreStatus",
+    "ExpandedSearchResult",
+    "ExpansionInfo",
+    "ExpansionSpeed",
+    "ExpansionStatus",
+    "ReasoningEffort",
     "DimensionSchema",
     "SchemaWarning",
     "EntryInput",
@@ -152,4 +174,4 @@ __all__ = [
     "OverlapCandidate",
 ]
 
-__version__ = "0.2.6"
+__version__ = "0.3.0"

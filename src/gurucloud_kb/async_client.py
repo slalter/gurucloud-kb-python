@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from gurucloud_kb._credentials import AsyncClientCredentials
 from gurucloud_kb._async_http import AsyncHTTPClient
 from gurucloud_kb.async_kb import AsyncKnowledgeBank
 from gurucloud_kb.types import (
@@ -219,6 +220,19 @@ class AsyncGuruCloudClient:
     async def delete_api_key(self, key_id: str) -> dict[str, Any]:
         """Delete an API key."""
         return await self._http.delete(f"/api-keys/{key_id}")
+
+    # ── client credentials ──────────────────────────────────────
+
+    @property
+    def credentials(self) -> AsyncClientCredentials:
+        """Your own model-provider keys, stored encrypted on the platform.
+
+        ``client.credentials.set("openai", api_key=...)`` makes expanded
+        search (:meth:`~gurucloud_kb.kb.KnowledgeBank.search_expanded`) bill
+        your provider account instead of the platform's. See
+        :class:`~gurucloud_kb._credentials.AsyncClientCredentials`.
+        """
+        return AsyncClientCredentials(self._http)
 
     # ── lifecycle ───────────────────────────────────────────────
 

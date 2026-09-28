@@ -136,3 +136,52 @@ def normalize_search_request(request: Mapping[str, Any]) -> dict[str, Any]:
             req[key] = req[key].isoformat()
 
     return req
+
+
+# ── expanded search ─────────────────────────────────────────────
+
+EXPANDED_SEARCH_OPTION_KEYS = (
+    "metadata_filters",
+    "category_filters",
+    "combination_mode",
+    "explain",
+    "query_source",
+    "content_weight",
+    "lexical",
+    "lexical_options",
+    "speed",
+    "model",
+    "reasoning_effort",
+    "timeout_seconds",
+    "use_cache",
+    "context",
+    "exclude_dimensions",
+    "expand",
+)
+
+
+def build_expanded_search(
+    query: str,
+    *,
+    k: int,
+    threshold: float,
+    time_bounds: Mapping[str, Optional[DateInput]],
+    options: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Body of ``POST /banks/{kb}/search/expanded``.
+
+    Only options that were actually given go on the wire, so the platform's
+    defaults (content weight 3.0, lexical arm on, 2.5 s model timeout, cache
+    on) apply unless overridden. ``datetime`` bounds serialize to ISO-8601.
+    """
+    if not query or not query.strip():
+        raise ValueError("query must not be blank")
+    req: dict[str, Any] = {"query": query.strip(), "k": k, "threshold": threshold}
+    for key, val in time_bounds.items():
+        iso = _iso(val)
+        if iso is not None:
+            req[key] = iso
+    for key in EXPANDED_SEARCH_OPTION_KEYS:
+        if key in options and options[key] is not None:
+            req[key] = options[key]
+    return req

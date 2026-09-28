@@ -8,8 +8,11 @@ from typing import Any, Literal
 from gurucloud_kb._http import HTTPClient
 from gurucloud_kb import _playbooks as _pb
 from gurucloud_kb._playbooks import qs as _qs
-from gurucloud_kb._search import build_string_search, normalize_search_request
+from gurucloud_kb._search import build_expanded_search, build_string_search, normalize_search_request
 from gurucloud_kb.types import (
+    ExpandedSearchResult,
+    ExpansionSpeed,
+    ReasoningEffort,
     BatchIngestResult,
     ClusterAlgorithm,
     ClusteringResult,
@@ -299,6 +302,112 @@ class KnowledgeBank:
             request = normalize_search_request(query)
 
         return self._http.post(self._path("/search"), json=request)
+
+    def search_expanded(
+        self,
+        query: str,
+        *,
+        k: int = 10,
+        threshold: float = 0.25,
+        metadata_filters: dict[str, Any] | None = None,
+        speed: ExpansionSpeed | None = None,
+        content_weight: float | None = None,
+        lexical: bool | None = None,
+        model: str | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
+        timeout_seconds: float | None = None,
+        context: str | None = None,
+        exclude_dimensions: list[str] | None = None,
+        expand: bool | None = None,
+        use_cache: bool | None = None,
+        explain: bool | None = None,
+        created_after: str | datetime | None = None,
+        created_before: str | datetime | None = None,
+        updated_after: str | datetime | None = None,
+        updated_before: str | datetime | None = None,
+        event_after: str | datetime | None = None,
+        event_before: str | datetime | None = None,
+        **options: Any,
+    ) -> ExpandedSearchResult:
+        """Search with a model-written expansion of ``query``.
+
+        A small model reads this bank's dimension DESCRIPTIONS and writes the
+        search text each dimension implies for the query, plus short
+        descriptors. The platform then searches the raw query + descriptors
+        in the primary content dimension (``content_weight``, default 3.0),
+        every filled dimension at its schema weight, and the lexical arm on
+        the raw words (so titles and identifiers stay findable). Measured on
+        a 47-query truth set: nDCG@10 0.60 (raw) -> 0.81.
+
+        Never worse than :meth:`search`: if the model step cannot run (no
+        credential, timeout, provider error) the raw search runs instead and
+        ``result["expansion"]["status"]`` says why. The model call is paid by
+        your stored credential (``client.credentials``) when you have one,
+        otherwise by the platform's own key; ``expansion.credential_source``
+        reports which.
+
+        Args:
+            query: What the user typed.
+            k, threshold: Result count / minimum combined score.
+            metadata_filters: Exact JSONB-containment filter on entry metadata.
+            speed: ``"fast"`` (default: fast model, no reasoning, 2.5 s limit,
+                about 0.8 s) or ``"thorough"`` (cheap model, low reasoning,
+                6 s limit, about 3 s). Quality measured equal within noise.
+            content_weight: Weight of the primary content dimension (default 3.0).
+            lexical: Run the lexical arm on the raw query (default True).
+            model: Override the expander model (else your credential's
+                ``default_model``, else the preset's model).
+            reasoning_effort: Override the preset's reasoning level; the
+                platform translates it to what the model family accepts.
+            timeout_seconds: Override the preset's time limit; on timeout
+                the raw search runs.
+            context: Extra guidance for the expander about the corpus or the
+                searcher (the bank description is always included).
+            exclude_dimensions: Dimension names the model must not fill.
+            expand: ``False`` runs the raw search through this endpoint
+                (A/B against the expanded one).
+            use_cache: Reuse a recent expansion of the same query (default True).
+            explain: Include the query plan.
+            created_after, ..., event_before: Hard time-window filters, as on
+                :meth:`search`.
+            **options: Forwarded verbatim (``category_filters``,
+                ``combination_mode``, ``lexical_options``, ``query_source``).
+
+        Returns:
+            ``{"results": [...], "expansion": {...}, "search_request": {...}}``
+            — the ranked entries, what the model did, and the effective
+            multi-dimensional request that produced the results.
+        """
+        given: dict[str, Any] = dict(options)
+        given.update(
+            metadata_filters=metadata_filters,
+            speed=speed,
+            reasoning_effort=reasoning_effort,
+            content_weight=content_weight,
+            lexical=lexical,
+            model=model,
+            timeout_seconds=timeout_seconds,
+            context=context,
+            exclude_dimensions=exclude_dimensions,
+            expand=expand,
+            use_cache=use_cache,
+            explain=explain,
+        )
+        request = build_expanded_search(
+            query,
+            k=k,
+            threshold=threshold,
+            time_bounds={
+                "created_after": created_after,
+                "created_before": created_before,
+                "updated_after": updated_after,
+                "updated_before": updated_before,
+                "event_after": event_after,
+                "event_before": event_before,
+            },
+            options=given,
+        )
+        return self._http.post(self._path("/search/expanded"), json=request)
 
     # ── clustering ──────────────────────────────────────────────
 
