@@ -756,7 +756,39 @@ from gurucloud_kb import (
 
 ---
 
+## Module registry harness (`gurucloud_kb.modreg`)
+
+The per-repository **module registry** automation keeps one Knowledge Bank
+entry per canonical shared module and retires duplicates only after proving
+the replacement equivalent (recorded calls → byte-for-byte replay →
+differential fuzzing → production shadow-compare). Its deterministic harness
+ships in this package so the automation can run in any repository:
+
+```bash
+pip install "gurucloud-kb[modreg]"          # psycopg2 (ledger) + hypothesis (fuzz)
+python -m gurucloud_kb.modreg --help        # scan, purity, replay, fuzz, corpus-stats, corpus-to-test, ledger …
+python -m gurucloud_kb.modreg scan --root . --json
+python -m pytest -p gurucloud_kb.modreg.trace_plugin ...   # harvest a call corpus from your own tests
+```
+
+`scan`, `purity`, `replay`, `corpus-stats` and `corpus-to-test` need only the
+standard library; `ledger` needs the `modreg` extra's psycopg2 and `fuzz` its
+Hypothesis. The canonical source lives in the gurucloudai monorepo under
+`services/module_registry/` and is mirrored here byte for byte; agents do not
+edit the harness, they file a card.
+
+---
+
 ## Changelog
+
+### 0.4.0
+
+- **Module registry harness.** New `gurucloud_kb.modreg` package (the
+  `module_registry` automation's scan / purity / tracer / replay / fuzz /
+  shadow / ledger tools) with the `modreg` optional-dependency group, so the
+  automation runs in repositories other than the platform monorepo:
+  `pip install "gurucloud-kb[modreg]"` then `python -m gurucloud_kb.modreg`.
+  No change to the KB client API.
 
 ### 0.3.0
 
