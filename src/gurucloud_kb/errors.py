@@ -61,7 +61,9 @@ class ConnectionError(GuruCloudError):
         super().__init__(message)
 
 
-RUN_ADVANCE_ERROR_CODES = frozenset({"illegal_transition", "loop_limit", "run_not_running", "ambiguous_next"})
+RUN_ADVANCE_ERROR_CODES = frozenset(
+    {"illegal_transition", "loop_limit", "run_not_running", "ambiguous_next", "verdict_required", "invalid_verdict"}
+)
 
 
 class PlaybookRunError(APIError):
@@ -71,11 +73,15 @@ class PlaybookRunError(APIError):
         code: ``illegal_transition`` (``next_key`` is not a transition of the
             current step), ``loop_limit`` (that transition's loop budget is
             used up), ``run_not_running`` (the run is completed or abandoned)
-            or ``ambiguous_next`` (a decision step needs an explicit ``next_key``).
+            ``ambiguous_next`` (a decision step needs an explicit ``next_key``),
+            ``verdict_required`` or ``invalid_verdict`` (the playbook declares
+            a verdict vocabulary and the step was recorded without one of them).
         run_id / current_key / state: where the run is.
         legal: the transitions allowed right now (``to``, ``when``, ``limit``).
+        allowed_verdicts: the playbook's verdict vocabulary, on the two verdict codes.
 
-    Resolve by choosing one of ``legal`` (or ``abandon=True``).
+    Resolve by choosing one of ``legal`` (or ``abandon=True``), or by passing
+    one of ``allowed_verdicts``.
     """
 
     def __init__(self, message: str, details: dict | None = None) -> None:
@@ -85,6 +91,7 @@ class PlaybookRunError(APIError):
         self.current_key: str | None = details.get("current_key")
         self.state: str | None = details.get("state")
         self.legal: list[dict] = list(details.get("legal") or [])
+        self.allowed_verdicts: list[str] = list(details.get("allowed_verdicts") or [])
         super().__init__(409, code, message)
 
 

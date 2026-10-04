@@ -826,6 +826,15 @@ edit the harness, they file a card.
 
 ## Changelog
 
+### 0.5.2
+
+- **Verdict vocabulary.** A playbook may declare the verdicts its steps are
+  recorded with: `metadata={"verdicts": ["pass", "flagged", "not_applicable"]}`.
+  A run of that playbook then refuses a step recorded without one of them:
+  `PlaybookRunError` with `code` `verdict_required` or `invalid_verdict` and
+  `allowed_verdicts`. The run's `current_step` carries `verdicts`. Playbooks
+  without a list accept any verdict, as before.
+
 ### 0.5.1
 
 - **Runs on a subject.** `list_playbook_runs()` no longer needs a slug:

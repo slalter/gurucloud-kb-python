@@ -676,7 +676,9 @@ RunState = Literal["running", "completed", "abandoned"]
 ``completed`` and ``abandoned`` are terminal."""
 
 
-RunAdvanceErrorCode = Literal["illegal_transition", "loop_limit", "run_not_running", "ambiguous_next"]
+RunAdvanceErrorCode = Literal[
+    "illegal_transition", "loop_limit", "run_not_running", "ambiguous_next", "verdict_required", "invalid_verdict"
+]
 """Why an advance was refused (``PlaybookRunError.code``)."""
 
 
@@ -702,6 +704,7 @@ class RunStepView(TypedDict, total=False):
     body: str
     kb_entry_id: str | None
     transitions: list[RunTransition]
+    verdicts: list[str]
 
 
 class RunStepRecord(TypedDict, total=False):

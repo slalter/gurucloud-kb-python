@@ -116,6 +116,16 @@ class TestSyncRuns:
         assert json.loads(route.calls.last.request.content) == {
             "observation": "stale test", "verdict": "flagged", "evidence": {"last_test": "2026-05-02"}}
 
+    def test_verdict_refusal_raises_typed_error_with_the_vocabulary(self, kb) -> None:
+        body = {"error": {"code": "invalid_verdict", "message": "'odd' is not a verdict of this playbook",
+                          "details": {"error": "invalid_verdict", "run_id": "run-1", "current_key": "GAS-001", "state": "running",
+                                      "legal": [{"to": "GAS-002"}], "allowed_verdicts": ["pass", "flagged"]}}}
+        respx.post(f"{API_PREFIX}/banks/kb-1/playbook-runs/run-1/advance").mock(return_value=httpx.Response(409, json=body))
+        with pytest.raises(PlaybookRunError) as exc:
+            kb.advance_playbook_run("run-1", "x", verdict="odd")
+        assert exc.value.code == "invalid_verdict" and exc.value.allowed_verdicts == ["pass", "flagged"]
+        assert exc.value.current_key == "GAS-001"
+
     def test_get_not_found(self, kb) -> None:
         respx.get(f"{API_PREFIX}/banks/kb-1/playbook-runs/nope").mock(
             return_value=httpx.Response(404, json={"error": {"code": "playbook_run_error", "message": "No run"}}))

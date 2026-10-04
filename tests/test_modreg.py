@@ -40,4 +40,4 @@ def test_generated_characterization_test_imports_the_mirror(tmp_path: Path):
 
 
 def test_version_bumped_with_the_harness():
-    assert gurucloud_kb.__version__ == "0.5.1"
+    assert gurucloud_kb.__version__ == "0.5.2"
