@@ -712,6 +712,8 @@ class RunStepRecord(TypedDict, total=False):
     observation: str
     chosen_next: str | None
     reason: str | None
+    verdict: str | None
+    evidence: dict[str, Any] | None
     outcome: Literal["advanced", "completed", "abandoned"]
     changed_by: str | None
     created_at: str | None

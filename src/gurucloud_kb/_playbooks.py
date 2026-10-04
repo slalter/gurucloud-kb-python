@@ -96,9 +96,15 @@ def advance_run_body(
     abandon: bool,
     abandon_reason: str | None,
     changed_by: str | None,
+    verdict: str | None = None,
+    evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Wire body for POST /playbook-runs/{run_id}/advance."""
     body: dict[str, Any] = {"observation": observation}
+    if verdict:
+        body["verdict"] = verdict
+    if evidence is not None:
+        body["evidence"] = dict(evidence)
     if next_key:
         body["next_key"] = next_key
     if reason:
@@ -119,6 +125,11 @@ def run_list_params(state: RunState | str | None, subject: str | None, limit: in
     if subject:
         params["subject"] = subject
     return params
+
+
+def run_list_path(slug: str | None) -> str:
+    """One playbook's runs live under the playbook; without a slug the listing spans the bank."""
+    return f"/playbooks/{slug}/runs" if slug else "/playbook-runs"
 
 
 def qs(params: dict[str, Any]) -> str:

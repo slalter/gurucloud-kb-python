@@ -629,6 +629,9 @@ except PlaybookRunError as e:      # illegal_transition | loop_limit | run_not_r
 
 kb.get_playbook_run(run["id"])["trail"]                 # every observation and branch taken
 kb.list_playbook_runs("well-review", state="running")
+kb.list_playbook_runs(subject="WELL-7")          # every run on one subject, across playbooks
+kb.advance_playbook_run(run["id"], "Last test is 5 months old",
+                        verdict="flagged", evidence={"last_test": "2026-05-02"})
 kb.advance_playbook_run(run["id"], "Well sold", abandon=True, abandon_reason="no longer needed")
 ```
 
@@ -822,6 +825,15 @@ edit the harness, they file a card.
 ---
 
 ## Changelog
+
+### 0.5.1
+
+- **Runs on a subject.** `list_playbook_runs()` no longer needs a slug:
+  `kb.list_playbook_runs(subject="WELL-7")` returns every run on that subject
+  across the bank's playbooks (each row names its `slug`).
+- **Verdict and evidence per step.** `advance_playbook_run(..., verdict="flagged",
+  evidence={...})` stores a short structured result and the evidence behind it
+  on the trail row; both come back on `RunStepRecord`.
 
 ### 0.5.0
 

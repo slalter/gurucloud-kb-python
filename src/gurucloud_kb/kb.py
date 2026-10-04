@@ -759,6 +759,8 @@ class KnowledgeBank:
         *,
         next_key: str | None = None,
         reason: str | None = None,
+        verdict: str | None = None,
+        evidence: dict[str, Any] | None = None,
         abandon: bool = False,
         abandon_reason: str | None = None,
         changed_by: str | None = None,
@@ -766,13 +768,15 @@ class KnowledgeBank:
         """Record ``observation`` on the current step and move along a legal
         transition. A linear step needs no ``next_key``; a decision step needs
         one; an end step (or the last linear step) completes the run.
-        ``abandon=True`` ends the run without finishing it.
+        ``abandon=True`` ends the run without finishing it. ``verdict`` (a short
+        result such as ``pass`` / ``flagged``) and ``evidence`` (a JSON object:
+        tools called, data references, figures) are stored on the trail row.
 
         An illegal move raises :class:`PlaybookRunError` with ``code`` in
         ``illegal_transition`` / ``loop_limit`` / ``run_not_running`` /
         ``ambiguous_next`` and ``legal`` listing the transitions allowed now.
         """
-        body = _pb.advance_run_body(observation, next_key, reason, abandon, abandon_reason, changed_by)
+        body = _pb.advance_run_body(observation, next_key, reason, abandon, abandon_reason, changed_by, verdict, evidence)
         return self._http.post(self._path(f"/playbook-runs/{run_id}/advance"), json=body)
 
     def get_playbook_run(self, run_id: str) -> PlaybookRun:
@@ -781,14 +785,16 @@ class KnowledgeBank:
 
     def list_playbook_runs(
         self,
-        slug: str,
+        slug: str | None = None,
         *,
         state: RunState | Literal["all"] | None = None,
         subject: str | None = None,
         limit: int = 25,
     ) -> RunList:
-        """Runs of one playbook, newest first (``state`` defaults to all)."""
-        return self._http.get(self._path(f"/playbooks/{slug}/runs"), params=_pb.run_list_params(state, subject, limit))
+        """Runs, newest first (``state`` defaults to all). With ``slug``: one
+        playbook's runs. Without it: runs across the bank's playbooks, usually
+        with ``subject`` (every run on one well, ticket or request)."""
+        return self._http.get(self._path(_pb.run_list_path(slug)), params=_pb.run_list_params(state, subject, limit))
 
     def get_mcp_config(self) -> dict[str, Any]:
         """Get the ``.mcp.json`` snippet for this KB."""

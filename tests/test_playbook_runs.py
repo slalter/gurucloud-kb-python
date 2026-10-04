@@ -61,6 +61,11 @@ class TestWireHelpers:
         assert advance_run_body("sold", None, None, True, "well sold", None) == {
             "observation": "sold", "abandon": True, "abandon_reason": "well sold"}
 
+    def test_advance_body_carries_verdict_and_evidence(self) -> None:
+        assert advance_run_body("seen", None, None, False, None, None, "flagged", {"mcfd": 41.5}) == {
+            "observation": "seen", "verdict": "flagged", "evidence": {"mcfd": 41.5}}
+        assert advance_run_body("seen", None, None, False, None, None, None, {}) == {"observation": "seen", "evidence": {}}
+
     def test_list_params(self) -> None:
         assert run_list_params(None, None, 25) == {"limit": 25}
         assert run_list_params("running", "well 7", 5) == {"limit": 5, "state": "running", "subject": "well 7"}
@@ -97,6 +102,19 @@ class TestSyncRuns:
         out = kb.list_playbook_runs("gas", state="running", subject="well 7", limit=5)
         assert out["total"] == 1
         assert dict(route.calls.last.request.url.params) == {"limit": "5", "state": "running", "subject": "well 7"}
+
+    def test_list_by_subject_alone_spans_the_bank(self, kb) -> None:
+        route = respx.get(f"{API_PREFIX}/banks/kb-1/playbook-runs").mock(
+            return_value=httpx.Response(200, json={"data": {"runs": [{"id": "run-1", "slug": "gas"}, {"id": "run-2", "slug": "oil"}], "total": 2}}))
+        out = kb.list_playbook_runs(subject="well 7")
+        assert [r.get("slug") for r in out.get("runs", [])] == ["gas", "oil"]
+        assert dict(route.calls.last.request.url.params) == {"limit": "25", "subject": "well 7"}
+
+    def test_advance_sends_verdict_and_evidence(self, kb) -> None:
+        route = respx.post(f"{API_PREFIX}/banks/kb-1/playbook-runs/run-1/advance").mock(return_value=httpx.Response(200, json={"data": RUN}))
+        kb.advance_playbook_run("run-1", "stale test", verdict="flagged", evidence={"last_test": "2026-05-02"})
+        assert json.loads(route.calls.last.request.content) == {
+            "observation": "stale test", "verdict": "flagged", "evidence": {"last_test": "2026-05-02"}}
 
     def test_get_not_found(self, kb) -> None:
         respx.get(f"{API_PREFIX}/banks/kb-1/playbook-runs/nope").mock(
