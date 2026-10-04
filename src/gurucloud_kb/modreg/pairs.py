@@ -126,9 +126,21 @@ class Ledger:
         self.conn.commit()
 
     # ---- runs -----------------------------------------------------------
-    def open_run(self, vm_session_id: str, mode: str, head_sha: Optional[str]) -> RunRow:
+    def derive_mode(self) -> str:
+        """The mode a new run is in: ``bootstrap`` until the
+        ``bootstrap_complete_at`` watermark is set, ``incremental`` after."""
+        return "incremental" if self.get_watermark("bootstrap_complete_at") else "bootstrap"
+
+    def open_run(self, vm_session_id: str, mode: Optional[str] = None, head_sha: Optional[str] = None) -> RunRow:
         """Open a run row, or RESUME the open row for the same session id (a
-        Claude relaunch inside the same VM must never open a second row)."""
+        Claude relaunch inside the same VM must never open a second row).
+
+        ``mode`` is recorded as given; when omitted it is derived from the
+        bootstrap watermark (``derive_mode``) so ``runs.mode`` in the audit
+        trail reflects the mode the run actually worked in (kanban 9351e0a3:
+        a fixed 'bootstrap' default mislabeled every incremental run)."""
+        if mode is None:
+            mode = self.derive_mode()
         with self.conn.cursor() as cur:
             cur.execute("SELECT id, mode FROM runs WHERE vm_session_id = %s AND status = 'open' ORDER BY id DESC LIMIT 1", (vm_session_id,))
             row = cur.fetchone()

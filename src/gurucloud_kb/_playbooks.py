@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlencode
 
-from gurucloud_kb.types import PlaybookStatus, PlaybookStepInput
+from gurucloud_kb.types import PlaybookStatus, PlaybookStepInput, RunState
 
 
 def list_params(
@@ -73,6 +73,52 @@ def delete_params(reason: str | None, changed_by: str | None) -> dict[str, Any]:
 
 def linked_params(include_linked_entries: bool) -> dict[str, Any]:
     return {"include_linked_entries": "true" if include_linked_entries else "false"}
+
+
+def start_run_body(
+    subject: str | None, started_by: str | None, metadata: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Wire body for POST /playbooks/{slug}/runs (only what was given)."""
+    body: dict[str, Any] = {}
+    if subject:
+        body["subject"] = subject
+    if started_by:
+        body["started_by"] = started_by
+    if metadata is not None:
+        body["metadata"] = dict(metadata)
+    return body
+
+
+def advance_run_body(
+    observation: str,
+    next_key: str | None,
+    reason: str | None,
+    abandon: bool,
+    abandon_reason: str | None,
+    changed_by: str | None,
+) -> dict[str, Any]:
+    """Wire body for POST /playbook-runs/{run_id}/advance."""
+    body: dict[str, Any] = {"observation": observation}
+    if next_key:
+        body["next_key"] = next_key
+    if reason:
+        body["reason"] = reason
+    if abandon:
+        body["abandon"] = True
+        if abandon_reason:
+            body["abandon_reason"] = abandon_reason
+    if changed_by:
+        body["changed_by"] = changed_by
+    return body
+
+
+def run_list_params(state: RunState | str | None, subject: str | None, limit: int) -> dict[str, Any]:
+    params: dict[str, Any] = {"limit": limit}
+    if state:
+        params["state"] = state
+    if subject:
+        params["subject"] = subject
+    return params
 
 
 def qs(params: dict[str, Any]) -> str:

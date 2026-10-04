@@ -131,5 +131,8 @@ export function createApi(kbId, base, opts = {}) {
     upsertPlaybook: (slug, body, params) => req('PUT', `/playbooks/${encodeURIComponent(slug)}`, { body, params }),
     deletePlaybook: (slug, params) => req('DELETE', `/playbooks/${encodeURIComponent(slug)}`, { params }),
     listPlaybookVersions: (slug) => req('GET', `/playbooks/${encodeURIComponent(slug)}/versions`),
+    // playbook runs (read-only; agents create them through MCP)
+    listPlaybookRuns: (slug, params) => req('GET', `/playbooks/${encodeURIComponent(slug)}/runs`, { params }),
+    getPlaybookRun: (runId) => req('GET', `/playbook-runs/${encodeURIComponent(runId)}`),
   };
 }

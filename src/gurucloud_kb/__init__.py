@@ -29,6 +29,7 @@ from gurucloud_kb.errors import (
     NotFoundError,
     PermissionError,
     PlaybookOverlapError,
+    PlaybookRunError,
     RateLimitError,
 )
 from gurucloud_kb.kb import KnowledgeBank
@@ -86,8 +87,15 @@ from gurucloud_kb.types import (
     PlaybookStep,
     PlaybookStepInput,
     PlaybookSummary,
+    PlaybookRun,
     PlaybookVersion,
     PlaybookWriteResult,
+    RunList,
+    RunState,
+    RunStepRecord,
+    RunStepView,
+    RunSummary,
+    RunTransition,
     RecentQuery,
     RecentQueryList,
 )
@@ -113,6 +121,7 @@ __all__ = [
     "NotFoundError",
     "RateLimitError",
     "PlaybookOverlapError",
+    "PlaybookRunError",
     "ConnectionError",
     # Types
     "KBInfo",
@@ -168,10 +177,18 @@ __all__ = [
     "PlaybookSummary",
     "PlaybookVersion",
     "PlaybookWriteResult",
+    # Playbook runs
+    "PlaybookRun",
+    "RunList",
+    "RunState",
+    "RunStepRecord",
+    "RunStepView",
+    "RunSummary",
+    "RunTransition",
     "RecentQuery",
     "RecentQueryList",
     "LinkedEntry",
     "OverlapCandidate",
 ]
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"

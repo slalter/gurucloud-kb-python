@@ -227,6 +227,8 @@ export function createMapView(ctx) {
         } },
         { selector: 'node.step.unlinked', style: { 'background-opacity': 0.55 } },
         { selector: 'edge.precedes', style: { width: 2, 'line-color': COLORS.step, 'target-arrow-color': COLORS.step, 'target-arrow-shape': 'triangle', 'curve-style': 'bezier', 'arrow-scale': 0.8 } },
+        { selector: 'edge.precedes.branch', style: { 'curve-style': 'unbundled-bezier', 'control-point-distances': 'data(arc)', 'control-point-weights': 0.5, label: 'data(label)', 'font-size': 8, color: COLORS.text, 'text-background-color': '#ffffff', 'text-background-opacity': 0.85, 'text-background-padding': 2, 'text-rotation': 'none' } },
+        { selector: 'edge.precedes.loop', style: { 'line-style': 'dashed' } },
         { selector: 'edge.cites', style: { width: 1.2, 'line-color': COLORS.link, 'line-style': 'dotted', 'curve-style': 'unbundled-bezier', 'target-arrow-shape': 'circle', 'target-arrow-color': COLORS.link, 'arrow-scale': 0.6, opacity: 0.8 } },
       ],
     });
@@ -335,12 +337,25 @@ export function toElements(model) {
     p.steps.forEach((s) => {
       const id = `s:${s.id}`;
       els.push({ data: { id, slug: p.slug, position: s.position, label: truncate(s.title, 28), fullTitle: s.title, linked: s.linked, kbEntryId: s.kbEntryId }, position: { x: s.x, y: s.y }, classes: `step${s.linked ? '' : ' unlinked'}` });
-      els.push({ data: { id: `pe:${prev}->${id}`, source: prev, target: id }, classes: 'precedes' });
+      if (!p.branching) els.push({ data: { id: `pe:${prev}->${id}`, source: prev, target: id }, classes: 'precedes' });
       prev = id;
     });
+    if (p.branching) branchElements(p).forEach((e) => els.push(e));
   });
   model.links.forEach((l) => els.push({ data: { id: `l:${l.stepId}->${l.entryId}`, source: `s:${l.stepId}`, target: `e:${l.entryId}` }, classes: 'cites' }));
   return els;
+}
+
+/** Edges of a branching playbook: playbook → start step, then one edge per
+    transition, labelled with its condition; loops carry the `loop` class. */
+function branchElements(p) {
+  const out = [];
+  if (p.startId) out.push({ data: { id: `pe:p:${p.slug}->s:${p.startId}`, source: `p:${p.slug}`, target: `s:${p.startId}` }, classes: 'precedes' });
+  p.edges.forEach((e) => {
+    const label = e.when ? truncate(e.when, 24) : (e.loop && e.limit != null ? `≤${e.limit}×` : '');
+    out.push({ data: { id: `pe:s:${e.id}`, source: `s:${e.from}`, target: `s:${e.to}`, label, when: e.when || '', limit: e.limit, arc: e.arc }, classes: `precedes branch${e.loop ? ' loop' : ''}` });
+  });
+  return out;
 }
 
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }

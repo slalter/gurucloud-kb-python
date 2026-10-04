@@ -307,7 +307,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("action", choices=["init", "summary", "open", "close", "sync-scan", "pending", "decide", "kb-ids", "verify-kb-ids", "pair-ensure", "pair-move", "pairs", "group-ensure", "group-attach", "group-move", "groups", "finding", "watermark", "shadow-observe"])
     s.add_argument("wm_action", nargs="?", choices=["get", "set"]); s.add_argument("key", nargs="?"); s.add_argument("value", nargs="?")
     s.add_argument("--uri-file", default=os.environ.get("MODULE_REGISTRY_RUN_DB_URI_FILE", "~/.automation_run_db_uri"), help="file holding the run-DB URI (never pass the URI itself on argv)")
-    s.add_argument("--run-id", type=int); s.add_argument("--session"); s.add_argument("--mode", choices=["bootstrap", "incremental"], default="bootstrap"); s.add_argument("--head-sha")
+    s.add_argument("--run-id", type=int); s.add_argument("--session"); s.add_argument("--mode", choices=["bootstrap", "incremental"], default=None, help="open: run mode to record; omitted = derived from the bootstrap_complete_at watermark (bootstrap until it is set, incremental after)"); s.add_argument("--head-sha")
     s.add_argument("--outcome"); s.add_argument("--counts"); s.add_argument("--notes")
     s.add_argument("--root", default="."); s.add_argument("--fan-in", type=int, default=None, help="fan-in threshold for non-shared paths (default scan.DEFAULT_FAN_IN_THRESHOLD)"); s.add_argument("--limit", type=int, default=20)
     s.add_argument("--path"); s.add_argument("--status"); s.add_argument("--purity"); s.add_argument("--kb-entry-id"); s.add_argument("--duplicate-of"); s.add_argument("--reason")
@@ -322,8 +322,38 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+_WATERMARK_POSITIONALS = ("wm_action", "key", "value")
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse argv; ``ledger watermark`` positionals may sit after options.
+
+    argparse consumes consecutive positionals as one chunk, so in
+    ``ledger watermark set --uri-file F key value`` the optional ``key``/``value``
+    match empty before the option and ``key value`` come back unrecognized
+    (kanban bd54c2cb). Leftover non-option tokens fill the still-empty
+    watermark positionals in order; anything else still fails loudly.
+    """
+    p = build_parser()
+    a, extra = p.parse_known_args(argv)
+    if a.cmd == "ledger" and a.action == "watermark":
+        rest: list[str] = []
+        for tok in extra:
+            slot = next((n for n in _WATERMARK_POSITIONALS if getattr(a, n) is None), None)
+            if tok.startswith("-") or slot is None or rest:
+                rest.append(tok)
+                continue
+            if slot == "wm_action" and tok not in ("get", "set"):
+                p.error(f"argument wm_action: invalid choice: {tok!r} (choose from 'get', 'set')")
+            setattr(a, slot, tok)
+        extra = rest
+    if extra:
+        p.error(f"unrecognized arguments: {' '.join(extra)}")
+    return a
+
+
 def main(argv: list[str] | None = None) -> int:
-    a = build_parser().parse_args(argv)
+    a = parse_args(argv)
     return int(a.fn(a))
 
 

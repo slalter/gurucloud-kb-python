@@ -61,6 +61,33 @@ class ConnectionError(GuruCloudError):
         super().__init__(message)
 
 
+RUN_ADVANCE_ERROR_CODES = frozenset({"illegal_transition", "loop_limit", "run_not_running", "ambiguous_next"})
+
+
+class PlaybookRunError(APIError):
+    """Raised on 409 when a playbook run cannot advance as asked.
+
+    Attributes:
+        code: ``illegal_transition`` (``next_key`` is not a transition of the
+            current step), ``loop_limit`` (that transition's loop budget is
+            used up), ``run_not_running`` (the run is completed or abandoned)
+            or ``ambiguous_next`` (a decision step needs an explicit ``next_key``).
+        run_id / current_key / state: where the run is.
+        legal: the transitions allowed right now (``to``, ``when``, ``limit``).
+
+    Resolve by choosing one of ``legal`` (or ``abandon=True``).
+    """
+
+    def __init__(self, message: str, details: dict | None = None) -> None:
+        details = details or {}
+        code = str(details.get("error") or "illegal_transition")
+        self.run_id: str | None = details.get("run_id")
+        self.current_key: str | None = details.get("current_key")
+        self.state: str | None = details.get("state")
+        self.legal: list[dict] = list(details.get("legal") or [])
+        super().__init__(409, code, message)
+
+
 class PlaybookOverlapError(APIError):
     """Raised on 409 ``playbook_overlap``: the playbook you tried to write
     covers the same task as an existing ACTIVE playbook.

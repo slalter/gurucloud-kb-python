@@ -6,6 +6,8 @@ import { openModal, confirmModal } from './modal.js';
 import { openPlaybookEditor } from './playbook_editor.js';
 import { openEntryDetail } from './entry_detail.js';
 import { truncate } from './schema_utils.js';
+import { sortSteps, stepKind, describeTransitions, isBranching, cleanStep } from './playbook_graph.js';
+import { runsSection } from './playbook_runs.js';
 
 export const STATUS_CHIP = { active: 'success', draft: 'warn', superseded: 'muted' };
 const MIN_DELETE_REASON = 20;
@@ -21,13 +23,16 @@ export async function openPlaybookDetail(ctx, slug, { onChanged } = {}) {
   (pb.linked_entries || []).forEach((le) => { linkedById[le.id] = le; });
 
   const steps = h('ol', { class: 'kbx-steps' });
-  (pb.steps || []).forEach((st) => {
+  const allSteps = pb.steps || [];
+  const ordered = isBranching(allSteps) ? sortSteps(allSteps) : allSteps;
+  ordered.forEach((st) => {
     const linked = st.kb_entry_id ? linkedById[st.kb_entry_id] : null;
     steps.append(h('li', { class: 'kbx-step' },
       h('span', { class: 'kbx-step-num' }),
       h('div', { class: 'kbx-step-body' },
-        h('div', { class: 'kbx-step-title' }, st.title),
+        h('div', { class: 'kbx-step-title' }, st.title, stepBadges(st)),
         h('div', { class: 'kbx-step-text' }, st.body),
+        transitionList(st, ordered),
         st.kb_entry_id ? h('div', { class: 'kbx-step-link' },
           linked && !linked.missing
             ? h('div', { class: 'kbx-alert info', style: { padding: '8px 11px', cursor: 'pointer' }, onClick: () => { ref.close(); openEntryDetail(ctx, st.kb_entry_id); } },
@@ -43,6 +48,7 @@ export async function openPlaybookDetail(ctx, slug, { onChanged } = {}) {
     pb.summary ? h('p', { style: { color: 'var(--kbx-body)', marginTop: 0 } }, pb.summary) : null,
     h('h4', { style: { fontSize: '14px', color: 'var(--kbx-heading)', margin: '10px 0 4px' } }, `${(pb.steps || []).length} step${(pb.steps || []).length === 1 ? '' : 's'}`),
     steps,
+    runsSection(ctx, pb),
     h('dl', { class: 'kbx-kv kbx-mt-lg' },
       h('dt', {}, 'Created'), h('dd', {}, fmtDate(pb.created_at)),
       h('dt', {}, 'Updated'), h('dd', {}, fmtDate(pb.updated_at)),
@@ -53,6 +59,26 @@ export async function openPlaybookDetail(ctx, slug, { onChanged } = {}) {
   const editBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', onClick: () => { ref.close(); openPlaybookEditor(ctx, pb, { onSaved: changed }); } }, h('i', { class: 'bi bi-pencil' }), 'Edit');
   const delBtn = h('button', { class: 'kbx-btn kbx-btn-danger', type: 'button', onClick: () => { ref.close(); confirmDeletePlaybook(ctx, pb.slug, pb.title, { onChanged }); } }, h('i', { class: 'bi bi-trash' }), 'Delete');
   ref.setFoot([versionsBtn, editBtn, delBtn]);
+}
+
+const KIND_CHIP = { decision: ['info', 'Decision'], end: ['muted', 'End'] };
+
+/** Kind badge (Decision / End; nothing for an action) and the step key. */
+function stepBadges(st) {
+  const chip = KIND_CHIP[stepKind(st)];
+  if (!chip && !st.key) return null;
+  return h('span', { style: { marginLeft: '8px', fontWeight: '400' } },
+    chip ? h('span', { class: `kbx-chip ${chip[0]}`, dataset: { role: 'step-kind' } }, chip[1]) : null,
+    st.key ? h('span', { class: 'kbx-mono kbx-muted', dataset: { role: 'step-key' }, style: { marginLeft: chip ? '6px' : '0', fontSize: '12px' } }, st.key) : null);
+}
+
+/** "when X → Y" / "then → Y" / "back to Y, at most N times" under a step. */
+function transitionList(st, ordered) {
+  const lines = describeTransitions(st, ordered);
+  if (!lines.length) return null;
+  return h('ul', { class: 'kbx-step-next', style: { margin: '6px 0 0', paddingLeft: '18px', fontSize: '13px', color: 'var(--kbx-body)' } },
+    ...lines.map((l) => h('li', { dataset: { transition: l.type } },
+      h('i', { class: `bi ${l.type === 'loop' ? 'bi-arrow-repeat' : 'bi-arrow-return-right'}`, style: { marginRight: '6px' } }), l.text)));
 }
 
 export async function openPlaybookVersions(ctx, slug, { onChanged } = {}) {
@@ -86,7 +112,7 @@ export async function openPlaybookVersions(ctx, slug, { onChanged } = {}) {
     if (!ok) return;
     const body = {
       title: snap.title, when_to_use: snap.when_to_use, summary: snap.summary || '',
-      steps: (snap.steps || []).map((s) => ({ title: s.title, body: s.body, kb_entry_id: s.kb_entry_id || null })),
+      steps: (snap.steps || []).map(cleanStep),
       status: snap.status, metadata: snap.metadata || null,
       change_note: `restore of v${version}`, changed_by: 'explorer',
     };

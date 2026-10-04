@@ -543,6 +543,21 @@ PlaybookStatus = Literal["draft", "active", "superseded"]
 part in the overlap guard; ``superseded`` ones are kept for the audit trail."""
 
 
+StepKind = Literal["action", "decision", "end"]
+"""What a step is in the workflow graph: ``action`` (do, then continue; at most
+one transition), ``decision`` (two or more conditional transitions) or ``end``."""
+
+
+class StepTransition(TypedDict, total=False):
+    """One outgoing edge of a step: go ``to`` that step key ``when`` the
+    plain-language condition holds; ``limit`` caps a transition back to an
+    earlier step."""
+
+    to: str
+    when: str
+    limit: int
+
+
 class PlaybookStepInput(TypedDict, total=False):
     """One ordered step as written by the caller (positions come from list order)."""
 
@@ -551,6 +566,30 @@ class PlaybookStepInput(TypedDict, total=False):
     kb_entry_id: str
     """Optional entry id whose fact this step relies on; ``get_playbook``
     inlines it under ``linked_entries`` instead of duplicating the fact."""
+    key: str
+    """Stable id of the step inside the playbook (e.g. ``GAS-002``)."""
+    kind: StepKind
+    next: list[StepTransition]
+    """Outgoing transitions; omitted on a linear step (it flows to the next position)."""
+
+
+class GraphEdge(TypedDict, total=False):
+    """One edge of a playbook's workflow graph as returned by ``get_playbook``."""
+
+    from_: str
+    to: str
+    when: str | None
+    limit: int | None
+    implicit: bool
+
+
+class PlaybookGraph(TypedDict, total=False):
+    """Start node and every edge of a branching playbook (``edges`` use the
+    JSON key ``from``; read them as dicts)."""
+
+    start: str
+    edges: list[dict[str, Any]]
+    branching: bool
 
 
 class PlaybookStep(PlaybookStepInput, total=False):
@@ -607,6 +646,8 @@ class Playbook(TypedDict, total=False):
     updated_at: str | None
     steps: list[PlaybookStep]
     linked_entries: list[LinkedEntry]
+    graph: PlaybookGraph | None
+    """Present on a branching playbook: start node and every edge."""
 
 
 class PlaybookWriteResult(TypedDict, total=False):
@@ -628,6 +669,93 @@ class PlaybookStats(TypedDict, total=False):
     active: int
     draft: int
     superseded: int
+
+
+RunState = Literal["running", "completed", "abandoned"]
+"""Lifecycle of a playbook run. ``running`` advances along legal transitions;
+``completed`` and ``abandoned`` are terminal."""
+
+
+RunAdvanceErrorCode = Literal["illegal_transition", "loop_limit", "run_not_running", "ambiguous_next"]
+"""Why an advance was refused (``PlaybookRunError.code``)."""
+
+
+class RunTransition(TypedDict, total=False):
+    """A transition the current step may take now: ``to`` a step key (or
+    position), ``when`` the condition holds; ``limit`` and ``taken`` show a
+    bounded loop's budget; ``implicit`` marks the linear next-position edge."""
+
+    to: str
+    when: str | None
+    limit: int | None
+    taken: int
+    implicit: bool
+
+
+class RunStepView(TypedDict, total=False):
+    """The run's current step with the transitions it may take."""
+
+    key: str
+    position: int
+    kind: StepKind
+    title: str
+    body: str
+    kb_entry_id: str | None
+    transitions: list[RunTransition]
+
+
+class RunStepRecord(TypedDict, total=False):
+    """One row of the trail: what was observed on a step and where the run went."""
+
+    seq: int
+    step_key: str
+    observation: str
+    chosen_next: str | None
+    reason: str | None
+    outcome: Literal["advanced", "completed", "abandoned"]
+    changed_by: str | None
+    created_at: str | None
+
+
+class PlaybookRun(TypedDict, total=False):
+    """A run of a playbook on a subject, pinned to the playbook version it started on."""
+
+    id: str
+    playbook_id: str
+    slug: str
+    version: int
+    subject: str | None
+    state: RunState
+    current_key: str | None
+    current_step: RunStepView | None
+    started_by: str | None
+    metadata: dict[str, Any]
+    abandon_reason: str | None
+    started_at: str | None
+    updated_at: str | None
+    completed_at: str | None
+    trail: list[RunStepRecord]
+
+
+class RunSummary(TypedDict, total=False):
+    """Compact row returned by ``list_playbook_runs``."""
+
+    id: str
+    slug: str
+    version: int
+    subject: str | None
+    state: RunState
+    current_key: str | None
+    steps_taken: int
+    started_by: str | None
+    started_at: str | None
+    updated_at: str | None
+    completed_at: str | None
+
+
+class RunList(TypedDict, total=False):
+    runs: list[RunSummary]
+    total: int
 
 
 class OverlapCandidate(TypedDict, total=False):

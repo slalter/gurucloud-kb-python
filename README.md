@@ -590,6 +590,48 @@ kb.get_playbook_stats()                                # {"active": n, "draft": 
 kb.delete_playbook("pm-hourly-sweep-filing")           # snapshots are retained
 ```
 
+**Branching.** A step may carry a stable `key`, a `kind` (`action`, `decision`
+or `end`) and `next`, a list of transitions `{"to": <key>, "when": <condition>,
+"limit": <n>}`. A step without `next` flows to the next one. The bank checks
+the graph on write (every target resolves, a decision has two or more distinct
+conditions, every step is reachable, a loop back needs a `limit`) and
+`get_playbook` returns it under `graph`.
+
+```python
+kb.upsert_playbook(
+    "well-review",
+    title="Daily well review",
+    when_to_use="Working a flagged well: which checks apply and how to disposition it",
+    steps=[
+        {"key": "W-001", "title": "Identify the issue", "body": "..."},
+        {"key": "W-002", "kind": "decision", "title": "Well test or meter?", "body": "...",
+         "next": [{"to": "W-WT", "when": "measured by well test"},
+                  {"to": "W-MTR", "when": "has its own meter"}]},
+        {"key": "W-WT", "title": "Well test review", "body": "...", "next": [{"to": "W-END"}]},
+        {"key": "W-MTR", "title": "Meter trend review", "body": "...", "next": [{"to": "W-END"}]},
+        {"key": "W-END", "kind": "end", "title": "Disposition", "body": "..."},
+    ],
+)
+```
+
+**Runs.** A run walks a playbook on a subject and keeps the trail. It is pinned
+to the playbook version it started on and only accepts legal transitions.
+
+```python
+from gurucloud_kb import PlaybookRunError
+
+run = kb.start_playbook_run("well-review", subject="well 7")
+run = kb.advance_playbook_run(run["id"], "Gas down 40% over three days")   # linear step
+try:
+    run = kb.advance_playbook_run(run["id"], "Has an EFM meter", next_key="W-MTR", reason="metered")
+except PlaybookRunError as e:      # illegal_transition | loop_limit | run_not_running | ambiguous_next
+    print(e.code, [t["to"] for t in e.legal])
+
+kb.get_playbook_run(run["id"])["trail"]                 # every observation and branch taken
+kb.list_playbook_runs("well-review", state="running")
+kb.advance_playbook_run(run["id"], "Well sold", abandon=True, abandon_reason="no longer needed")
+```
+
 **Overlap guard.** An `upsert_playbook` whose `when_to_use` scores at or above
 the bank's threshold (default 0.82 cosine) against another *active* playbook
 raises `PlaybookOverlapError` with `.candidates`. Extend the existing slug
@@ -780,6 +822,20 @@ edit the harness, they file a card.
 ---
 
 ## Changelog
+
+### 0.5.0
+
+- **Branching playbooks.** Steps carry a stable `key`, a `kind`
+  (`action` | `decision` | `end`) and `next` transitions (`to`, `when`,
+  `limit`); a playbook read returns its `graph`. New types `StepKind`,
+  `StepTransition`, `PlaybookGraph`. Linear playbooks are unchanged.
+- **Playbook runs.** `start_playbook_run`, `advance_playbook_run`,
+  `get_playbook_run` and `list_playbook_runs` on `KB` and `AsyncKB` walk a
+  playbook on a subject and keep the trail. A refused advance raises
+  `PlaybookRunError` (`illegal_transition`, `loop_limit`, `run_not_running`,
+  `ambiguous_next`) carrying the legal next steps.
+- **Explorer.** The playbook page draws the branch graph and lists runs with
+  their trails.
 
 ### 0.4.0
 

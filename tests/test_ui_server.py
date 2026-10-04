@@ -158,7 +158,7 @@ def test_render_index_fills_placeholders():
 
 def test_bundle_is_complete():
     d = ui_dir()
-    for rel in ("index.html", "kb-explorer.css", "js/main.js", "js/host.js", "js/map.js", "js/map_layout.js",
+    for rel in ("index.html", "kb-explorer.css", "js/main.js", "js/host.js", "js/map.js", "js/map_layout.js", "js/playbook_graph.js", "js/playbook_runs.js",
                 "vendor/cytoscape.min.js", "vendor/dagre.min.js", "vendor/cytoscape-dagre.js",
                 "vendor/bootstrap-icons.min.css", "vendor/fonts/bootstrap-icons.woff2"):
         assert (d / rel).is_file(), rel

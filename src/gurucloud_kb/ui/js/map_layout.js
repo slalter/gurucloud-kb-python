@@ -12,11 +12,16 @@
        its centre and fringe entries drift outward;
      • playbooks are laid out as horizontal step chains in a column to the
        right of the cluster field, with a link from each step to the entry it
-       cites when that entry is on the map.
+       cites when that entry is on the map. A branching playbook (any step with
+       `next` transitions) keeps its steps on the row in position order but its
+       edges follow the transitions (labelled with their condition, loops
+       marked) instead of the position chain.
 
    Exported for the renderer AND for the node test suite
    (tests/test_kb_map_layout.js), which pins the invariants: no cluster
    overlap, every member inside its circle, stable ordering, link resolution. */
+
+import { isBranching, deriveEdges, findStepIndex } from './playbook_graph.js';
 
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 const CLUSTER_GAP = 44;        // min distance between cluster circle edges
@@ -25,6 +30,7 @@ const MEMBER_MAX_R = 11;
 const PLAYBOOK_COL_GAP = 180;  // gap between cluster field and playbook column
 const PLAYBOOK_ROW_H = 96;
 const STEP_GAP = 118;
+const ARC_PER_SPAN = 22;       // bend of an edge that skips steps on the row
 
 export function clusterRadius(memberCount) {
   const n = Math.max(1, memberCount || 1);
@@ -175,7 +181,7 @@ export function buildMapModel(response, opts = {}) {
     playbooks.forEach((p, i) => {
       const y = startY + i * PLAYBOOK_ROW_H;
       const steps = (p.steps || []).slice().sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
-      const pb = { slug: p.slug, title: p.title || p.slug, status: p.status || 'active', x: startX, y, steps: [] };
+      const pb = { slug: p.slug, title: p.title || p.slug, status: p.status || 'active', x: startX, y, steps: [], branching: false, edges: [] };
       steps.forEach((s, j) => {
         const sid = `${p.slug}#${s.position ?? j + 1}`;
         const stepNode = { id: sid, slug: p.slug, position: s.position ?? j + 1, title: s.title || `Step ${j + 1}`, x: startX + STEP_GAP * (j + 1), y, kbEntryId: s.kb_entry_id || null, linked: false };
@@ -186,14 +192,41 @@ export function buildMapModel(response, opts = {}) {
         pb.steps.push(stepNode);
         maxX = Math.max(maxX, stepNode.x + 40);
       });
+      if (isBranching(steps)) {
+        pb.branching = true;
+        pb.edges = branchEdges(p, steps, pb.steps);
+        pb.startId = startStepId(p, steps, pb.steps);
+      }
       maxX = Math.max(maxX, startX + 60);
-      minY = Math.min(minY, y - 40); maxY = Math.max(maxY, y + 40);
+      minY = Math.min(minY, y - 40 - (pb.branching ? 3 * ARC_PER_SPAN : 0)); maxY = Math.max(maxY, y + 40 + (pb.branching ? 3 * ARC_PER_SPAN : 0));
       model.playbooks.push(pb);
     });
   }
 
   model.bounds = { minX, minY, maxX, maxY };
   return model;
+}
+
+/** Edges of a branching playbook between step-node ids. Uses get_playbook's
+    graph.edges when present (refs are step keys or position strings), else
+    derives them from the steps' `next`. Forward edges that skip steps arc
+    above the row and loops arc below it, so none hide behind the chain. */
+export function branchEdges(p, sortedSteps, stepNodes) {
+  const graphEdges = p.graph && Array.isArray(p.graph.edges) ? p.graph.edges : null;
+  const raw = graphEdges
+    ? graphEdges.map((e) => ({ fromIndex: findStepIndex(sortedSteps, e.from), toIndex: findStepIndex(sortedSteps, e.to), when: e.when || null, limit: e.limit ?? null }))
+    : deriveEdges(sortedSteps);
+  return raw.filter((e) => e.fromIndex >= 0 && e.toIndex >= 0).map((e, k) => {
+    const loop = e.toIndex <= e.fromIndex;
+    const span = Math.abs(e.toIndex - e.fromIndex);
+    const arc = loop ? ARC_PER_SPAN * Math.max(1, span) : (span > 1 ? -ARC_PER_SPAN * (span - 1) : 0);
+    return { id: `${stepNodes[e.fromIndex].id}->${stepNodes[e.toIndex].id}#${k}`, from: stepNodes[e.fromIndex].id, to: stepNodes[e.toIndex].id, when: e.when, limit: e.limit, loop, arc: Math.min(3 * ARC_PER_SPAN, Math.max(-3 * ARC_PER_SPAN, arc)) };
+  });
+}
+
+function startStepId(p, sortedSteps, stepNodes) {
+  const start = p.graph && p.graph.start != null ? findStepIndex(sortedSteps, p.graph.start) : -1;
+  return stepNodes[start >= 0 ? start : 0] ? stepNodes[start >= 0 ? start : 0].id : null;
 }
 
 /** Default request the Map tab sends. Exported so the UI and tests agree.

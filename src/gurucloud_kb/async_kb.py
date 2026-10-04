@@ -38,8 +38,11 @@ from gurucloud_kb.types import (
     PlaybookStats,
     PlaybookStatus,
     PlaybookStepInput,
+    PlaybookRun,
     PlaybookVersion,
     PlaybookWriteResult,
+    RunList,
+    RunState,
 )
 
 
@@ -643,6 +646,64 @@ class AsyncKnowledgeBank:
     async def list_playbook_versions(self, slug: str) -> list[PlaybookVersion]:
         """Version history for a playbook, newest first (full snapshots)."""
         return await self._http.get(self._path(f"/playbooks/{slug}/versions"))
+
+    # ── playbook runs ────────────────────────────────────────────────────
+
+    async def start_playbook_run(
+        self,
+        slug: str,
+        *,
+        subject: str | None = None,
+        started_by: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> PlaybookRun:
+        """Start a run of the playbook at ``slug`` on a ``subject`` (a well, a
+        ticket, a card). The run pins the playbook version it started on and
+        returns the first step with the transitions it may take::
+
+            run = await kb.start_playbook_run("dec-gas-well-review", subject="well 7")
+            run["current_step"]["transitions"]   # what the agent may do next
+        """
+        body = _pb.start_run_body(subject, started_by, metadata)
+        return await self._http.post(self._path(f"/playbooks/{slug}/runs"), json=body)
+
+    async def advance_playbook_run(
+        self,
+        run_id: str,
+        observation: str,
+        *,
+        next_key: str | None = None,
+        reason: str | None = None,
+        abandon: bool = False,
+        abandon_reason: str | None = None,
+        changed_by: str | None = None,
+    ) -> PlaybookRun:
+        """Record ``observation`` on the current step and move along a legal
+        transition. A linear step needs no ``next_key``; a decision step needs
+        one; an end step (or the last linear step) completes the run.
+        ``abandon=True`` ends the run without finishing it.
+
+        An illegal move raises :class:`PlaybookRunError` with ``code`` in
+        ``illegal_transition`` / ``loop_limit`` / ``run_not_running`` /
+        ``ambiguous_next`` and ``legal`` listing the transitions allowed now.
+        """
+        body = _pb.advance_run_body(observation, next_key, reason, abandon, abandon_reason, changed_by)
+        return await self._http.post(self._path(f"/playbook-runs/{run_id}/advance"), json=body)
+
+    async def get_playbook_run(self, run_id: str) -> PlaybookRun:
+        """A run: state, current step with its legal transitions, full trail."""
+        return await self._http.get(self._path(f"/playbook-runs/{run_id}"))
+
+    async def list_playbook_runs(
+        self,
+        slug: str,
+        *,
+        state: RunState | Literal["all"] | None = None,
+        subject: str | None = None,
+        limit: int = 25,
+    ) -> RunList:
+        """Runs of one playbook, newest first (``state`` defaults to all)."""
+        return await self._http.get(self._path(f"/playbooks/{slug}/runs"), params=_pb.run_list_params(state, subject, limit))
 
     async def get_mcp_config(self) -> dict[str, Any]:
         """Get the ``.mcp.json`` snippet for this KB."""

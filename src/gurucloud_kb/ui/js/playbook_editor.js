@@ -5,6 +5,9 @@
 
 import { h, mount, clear, toast } from './dom.js';
 import { openModal } from './modal.js';
+import { STEP_KINDS, stepKind, transitionsOf, findStepIndex, cleanStep } from './playbook_graph.js';
+
+const KIND_LABEL = { action: 'Action', decision: 'Decision', end: 'End' };
 
 export function openPlaybookEditor(ctx, existing, { prefill = null, onSaved } = {}) {
   const { api } = ctx;
@@ -21,26 +24,75 @@ export function openPlaybookEditor(ctx, existing, { prefill = null, onSaved } = 
   const noteInput = h('input', { class: 'kbx-input', placeholder: 'Change note (optional)', value: prefill && !isEdit ? 'created from entry in the explorer' : '' });
 
   const stepsHost = h('div', {});
+  const noticeHost = h('div', {});
   const stepRows = [];
+  let rowSeq = 0;
   function addStep(step) {
     const titleI = h('input', { class: 'kbx-input', placeholder: 'Step title', value: step ? step.title || '' : '' });
     const bodyI = h('textarea', { class: 'kbx-textarea', rows: '3', placeholder: 'What to do in this step' }, step ? step.body || '' : '');
     const entryI = h('input', { class: 'kbx-input kbx-mono', placeholder: 'Linked KB entry id (optional)', value: step && step.kb_entry_id ? step.kb_entry_id : '' });
-    const row = { titleI, bodyI, entryI };
+    const keyI = h('input', { class: 'kbx-input kbx-mono', placeholder: 'Key (optional, e.g. GAS-002)', value: step && step.key ? step.key : '', dataset: { role: 'step-key' } });
+    const kindSel = h('select', { class: 'kbx-select', dataset: { role: 'step-kind' } }, ...STEP_KINDS.map((k) => h('option', { value: k }, KIND_LABEL[k])));
+    kindSel.value = stepKind(step);
+    const transHost = h('div', { dataset: { role: 'transitions' } });
+    const row = { id: ++rowSeq, titleI, bodyI, entryI, keyI, kindSel, transHost, transitions: [], seedNext: transitionsOf(step) };
     stepRows.push(row);
-    const removeBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Remove step', onClick: () => { const i = stepRows.indexOf(row); if (i >= 0) stepRows.splice(i, 1); node.remove(); renumber(); } }, h('i', { class: 'bi bi-x-lg' }));
+    const addTransBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { role: 'add-transition' }, onClick: () => addTransition(row, null, null) }, h('i', { class: 'bi bi-plus-lg' }), 'Add transition');
+    row.transBlock = h('div', { class: 'kbx-field', style: { marginTop: '8px', marginBottom: 0 } },
+      h('div', { class: 'kbx-row-between' }, h('span', { class: 'kbx-hint' }, 'Transitions (leave empty to continue to the next step)'), addTransBtn), transHost);
+    const removeBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Remove step', onClick: () => removeStep(row) }, h('i', { class: 'bi bi-x-lg' }));
     const upBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Move up', onClick: () => move(row, -1) }, h('i', { class: 'bi bi-arrow-up' }));
     const downBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Move down', onClick: () => move(row, 1) }, h('i', { class: 'bi bi-arrow-down' }));
-    const node = h('div', { class: 'kbx-card', style: { padding: '12px', marginBottom: '10px', background: 'var(--kbx-surface-2)', boxShadow: 'none' } },
+    const node = h('div', { class: 'kbx-card', dataset: { role: 'step-row' }, style: { padding: '12px', marginBottom: '10px', background: 'var(--kbx-surface-2)', boxShadow: 'none' } },
       h('div', { class: 'kbx-row-between', style: { marginBottom: '8px' } }, h('span', { class: 'kbx-chip', dataset: { role: 'stepnum' } }, '#'), h('div', { class: 'kbx-row', style: { gap: '4px' } }, upBtn, downBtn, removeBtn)),
+      h('div', { class: 'kbx-field-row', style: { marginBottom: '8px' } }, h('div', { class: 'kbx-field', style: { marginBottom: 0 } }, kindSel), h('div', { class: 'kbx-field', style: { marginBottom: 0 } }, keyI)),
       h('div', { class: 'kbx-field', style: { marginBottom: '8px' } }, titleI),
       h('div', { class: 'kbx-field', style: { marginBottom: '8px' } }, bodyI),
-      h('div', { class: 'kbx-field', style: { marginBottom: 0 } }, entryI));
+      h('div', { class: 'kbx-field', style: { marginBottom: 0 } }, entryI),
+      row.transBlock);
     row.node = node;
+    kindSel.addEventListener('change', () => syncKind(row));
+    keyI.addEventListener('input', refreshTargets);
+    titleI.addEventListener('input', refreshTargets);
     stepsHost.append(node);
+    syncKind(row);
     renumber();
   }
-  function renumber() { stepRows.forEach((r, i) => { const b = r.node.querySelector('[data-role="stepnum"]'); if (b) b.textContent = `Step ${i + 1}`; }); }
+  function syncKind(row) { row.transBlock.style.display = row.kindSel.value === 'end' ? 'none' : ''; }
+  function addTransition(row, target, t) {
+    const sel = h('select', { class: 'kbx-select', dataset: { role: 'transition-target' }, 'aria-label': 'Go to step' });
+    const whenI = h('input', { class: 'kbx-input', dataset: { role: 'transition-when' }, placeholder: 'When… (condition, optional)', value: t && t.when ? t.when : '' });
+    const limitI = h('input', { class: 'kbx-input', type: 'number', min: '1', step: '1', dataset: { role: 'transition-limit' }, placeholder: 'Max loops', value: t && t.limit != null ? String(t.limit) : '', style: { maxWidth: '110px' } });
+    const tr = { target, sel, whenI, limitI };
+    const delBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Remove transition', dataset: { role: 'remove-transition' }, onClick: () => dropTransition(row, tr) }, h('i', { class: 'bi bi-x-lg' }));
+    tr.node = h('div', { class: 'kbx-row', dataset: { role: 'transition' }, style: { gap: '6px', marginTop: '6px' } }, h('i', { class: 'bi bi-arrow-return-right' }), sel, whenI, limitI, delBtn);
+    sel.addEventListener('change', () => { tr.target = stepRows.find((r) => String(r.id) === sel.value) || null; });
+    row.transitions.push(tr);
+    row.transHost.append(tr.node);
+    fillTargets(row, tr);
+  }
+  function dropTransition(row, tr) { const i = row.transitions.indexOf(tr); if (i >= 0) row.transitions.splice(i, 1); tr.node.remove(); }
+  function rowLabel(r) {
+    const key = r.keyI.value.trim(); const title = r.titleI.value.trim();
+    return [`Step ${stepRows.indexOf(r) + 1}`, key, title.length > 40 ? `${title.slice(0, 39)}…` : title].filter(Boolean).join(' · ');
+  }
+  function fillTargets(row, tr) {
+    clear(tr.sel);
+    tr.sel.append(h('option', { value: '' }, 'Go to step…'));
+    stepRows.filter((r) => r !== row).forEach((r) => tr.sel.append(h('option', { value: String(r.id) }, rowLabel(r))));
+    tr.sel.value = tr.target ? String(tr.target.id) : '';
+  }
+  function refreshTargets() { stepRows.forEach((r) => r.transitions.forEach((tr) => fillTargets(r, tr))); }
+  function removeStep(row) {
+    const i = stepRows.indexOf(row); if (i < 0) return;
+    const label = row.keyI.value.trim() || `Step ${i + 1}`;
+    stepRows.splice(i, 1); row.node.remove();
+    let dropped = 0;
+    stepRows.forEach((r) => r.transitions.filter((tr) => tr.target === row).forEach((tr) => { dropTransition(r, tr); dropped++; }));
+    if (dropped) mount(noticeHost, h('div', { class: 'kbx-alert warn', dataset: { role: 'transition-notice' }, style: { marginBottom: '10px' } }, h('i', { class: 'bi bi-info-circle' }), h('div', {}, `Removed ${dropped} transition${dropped === 1 ? '' : 's'} that pointed to ${label}.`)));
+    renumber();
+  }
+  function renumber() { stepRows.forEach((r, i) => { const b = r.node.querySelector('[data-role="stepnum"]'); if (b) b.textContent = `Step ${i + 1}`; }); refreshTargets(); }
   function move(row, delta) {
     const i = stepRows.indexOf(row); const j = i + delta;
     if (j < 0 || j >= stepRows.length) return;
@@ -48,7 +100,32 @@ export function openPlaybookEditor(ctx, existing, { prefill = null, onSaved } = 
     stepsHost.insertBefore(row.node, stepRows[j + 1] ? stepRows[j + 1].node : null);
     renumber();
   }
-  (seed.steps && seed.steps.length ? seed.steps : [null]).forEach(addStep);
+  const seedSteps = seed.steps && seed.steps.length ? seed.steps : [null];
+  seedSteps.forEach(addStep);
+  seedTransitions(seedSteps);
+  function seedTransitions(src) {
+    stepRows.forEach((r) => {
+      r.seedNext.forEach((t) => { const j = findStepIndex(src.filter(Boolean), t.to); addTransition(r, j >= 0 ? stepRows[j] : null, t); });
+      delete r.seedNext;
+    });
+  }
+  /** A transition target must be addressed by key; give a keyless target one. */
+  function ensureKey(r, kept) {
+    if (r.keyI.value.trim()) return;
+    const taken = new Set(stepRows.map((x) => x.keyI.value.trim()));
+    let n = kept.indexOf(r) + 1; while (taken.has(`step-${n}`)) n++;
+    r.keyI.value = `step-${n}`;
+  }
+  function collectSteps() {
+    const kept = stepRows.filter((r) => r.titleI.value.trim() || r.bodyI.value.trim());
+    const live = (r) => r.kindSel.value !== 'end' ? r.transitions.filter((tr) => tr.target && kept.includes(tr.target)) : [];
+    kept.forEach((r) => live(r).forEach((tr) => ensureKey(tr.target, kept)));
+    return kept.map((r) => cleanStep({
+      title: r.titleI.value.trim(), body: r.bodyI.value.trim(), kb_entry_id: r.entryI.value.trim() || null,
+      key: r.keyI.value, kind: r.kindSel.value,
+      next: live(r).map((tr) => ({ to: tr.target.keyI.value.trim(), when: tr.whenI.value, limit: tr.limitI.value })),
+    }));
+  }
 
   const overlapHost = h('div', {});
   const body = h('div', {},
@@ -60,7 +137,7 @@ export function openPlaybookEditor(ctx, existing, { prefill = null, onSaved } = 
     h('div', { class: 'kbx-field' }, h('label', {}, 'When to use'), whenInput),
     h('div', { class: 'kbx-field' }, h('label', {}, 'Summary'), summaryInput),
     h('div', { class: 'kbx-row-between kbx-mt' }, h('h4', { style: { margin: 0, fontSize: '14px' } }, 'Steps'), h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', onClick: () => addStep(null) }, h('i', { class: 'bi bi-plus-lg' }), 'Add step')),
-    h('div', { class: 'kbx-mt' }, stepsHost),
+    h('div', { class: 'kbx-mt' }, noticeHost, stepsHost),
     h('div', { class: 'kbx-field kbx-mt' }, h('label', {}, 'Change note'), noteInput),
     overlapHost);
 
@@ -74,7 +151,7 @@ export function openPlaybookEditor(ctx, existing, { prefill = null, onSaved } = 
     if (!slug) { toast('Slug is required', 'warning'); return; }
     if (title.length < 3) { toast('Title must be at least 3 characters', 'warning'); return; }
     if (when.length < 10) { toast('“When to use” must be at least 10 characters', 'warning'); return; }
-    const steps = stepRows.map((r) => ({ title: r.titleI.value.trim(), body: r.bodyI.value.trim(), kb_entry_id: r.entryI.value.trim() || null })).filter((s) => s.title || s.body);
+    const steps = collectSteps();
     if (!steps.length) { toast('Add at least one step', 'warning'); return; }
     for (const s of steps) { if (!s.title || !s.body) { toast('Every step needs a title and body', 'warning'); return; } }
     const payload = { title, when_to_use: when, summary: summaryInput.value.trim(), steps, status: statusSel.value, change_note: noteInput.value.trim(), changed_by: 'explorer' };
@@ -88,10 +165,18 @@ export function openPlaybookEditor(ctx, existing, { prefill = null, onSaved } = 
     } catch (e) {
       saveBtn.classList.remove('is-loading');
       if (e.status === 409 && e.details) renderOverlap(e.details);
+      else if (e.status === 422 || e.status === 400) renderInvalid(e);
       else toast(`Save failed: ${e.message}`, 'error');
     }
   }
   saveBtn.addEventListener('click', () => doSave(false));
+
+  function renderInvalid(e) {
+    mount(overlapHost, h('div', { class: 'kbx-alert danger kbx-mt', dataset: { role: 'save-error' } },
+      h('i', { class: 'bi bi-exclamation-octagon' }),
+      h('div', {}, h('div', { style: { fontWeight: '600' } }, 'The playbook was not saved'), h('div', {}, validationMessage(e)))));
+    if (overlapHost.scrollIntoView) overlapHost.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
 
   function renderOverlap(details) {
     const cands = details.candidates || [];
@@ -105,4 +190,15 @@ export function openPlaybookEditor(ctx, existing, { prefill = null, onSaved } = 
         h('div', { class: 'kbx-mt' }, forceBtn))));
     overlapHost.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
+}
+
+/** A readable message from a 422: the server's own message, or FastAPI's
+    validation list ([{loc, msg}]) flattened to "loc: msg" lines. */
+export function validationMessage(e) {
+  const raw = e && e.message ? String(e.message) : 'Validation failed';
+  if (!raw.startsWith('[')) return raw;
+  try {
+    const items = JSON.parse(raw);
+    return items.map((it) => (it && it.msg ? `${(it.loc || []).filter((x) => x !== 'body').join('.')}: ${it.msg}` : JSON.stringify(it))).join('; ');
+  } catch { return raw; }
 }

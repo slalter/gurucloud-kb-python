@@ -15,6 +15,8 @@ import httpx
 from gurucloud_kb.errors import (
     APIError,
     PlaybookOverlapError,
+    PlaybookRunError,
+    RUN_ADVANCE_ERROR_CODES,
     AuthenticationError,
     ConnectionError,
     NotFoundError,
@@ -112,6 +114,9 @@ class HTTPClient:
         if status == 409 and code == "playbook_overlap":
             details = error.get("details") if isinstance(error, dict) else None
             raise PlaybookOverlapError(message, details if isinstance(details, dict) else None)
+        if status == 409 and code in RUN_ADVANCE_ERROR_CODES:
+            details = error.get("details") if isinstance(error, dict) else None
+            raise PlaybookRunError(message, details if isinstance(details, dict) else None)
         if status == 401:
             raise AuthenticationError(code, message)
         if status == 403:
