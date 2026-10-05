@@ -13,8 +13,9 @@ export function openModal({ title, body, footer = [], wide = false }) {
     if (dialog.open) dialog.close();
   };
 
+  const titleEl = h('h3', { class: 'kbx-dialog-title' }, title || '');
   const head = h('div', { class: 'kbx-dialog-head' },
-    h('h3', { class: 'kbx-dialog-title' }, title || ''),
+    titleEl,
     h('button', { class: 'kbx-dialog-close', 'aria-label': 'Close', type: 'button', onClick: close }, '×'));
 
   const bodyWrap = h('div', { class: 'kbx-dialog-body' });
@@ -39,6 +40,7 @@ export function openModal({ title, body, footer = [], wide = false }) {
   return {
     dialog, close, body: bodyWrap, foot: footWrap, setFoot,
     setBody: (node) => { clear(bodyWrap); if (node) bodyWrap.append(node); },
+    setTitle: (text) => { titleEl.textContent = text || ''; },
   };
 }
 

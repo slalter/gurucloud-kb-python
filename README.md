@@ -826,6 +826,37 @@ edit the harness, they file a card.
 
 ## Changelog
 
+### 0.5.5
+
+- **Playbook metadata patching and a guard that refuses only new overlaps**
+  (matches kb-platform 1.6.0). `upsert_playbook(metadata_merge={...})` sets
+  the given metadata keys on top of the stored object and deletes a key given
+  as `None`, without a prior read; it is refused together with `metadata`. A
+  `metadata` replace on an existing playbook now keeps the reserved keys
+  `verdicts` and `derived_from` unless they are set to `None`, and the result
+  reports them under `metadata_kept`. The overlap guard refuses a write only
+  when it would newly overlap another active playbook: editing a playbook
+  whose sibling already overlapped it no longer raises `PlaybookOverlapError`,
+  and the result lists that sibling under `existing_overlaps`
+  (`PlaybookOverlapCandidate`, with `prior_similarity` and
+  `already_overlapping`). Older services ignore `metadata_merge`; pass
+  `metadata` with the full object against them.
+
+### 0.5.4
+
+- **Processes beside playbooks.** A stored row has a `genre`: `procedure` (a
+  playbook, the agent's own ordered procedure, walkable as a run) or `process`
+  (business process flow documentation: how the client's people and systems
+  move an order, request or exception from trigger to outcome). `list_playbooks(genre=...)`,
+  `get_playbook_stats(genre=...)` and `upsert_playbook(genre="process", ...)`
+  pass it through; a process step carries `process={"actor", "system", "needs",
+  "hands_to", "exceptions", "source"}` (`ProcessStepDetail`; the service refuses
+  a non-end step without an actor) and a process can never be started as a run.
+  Business banks expose processes through the MCP tools `list_processes`,
+  `get_process`, `document_process`, `list_process_versions` and
+  `retire_process`. The Explorer's Playbooks tab gains a genre filter, a
+  hand-off table on process detail and process fields in the editor.
+
 ### 0.5.3
 
 - **modreg: `ledger summary` bootstrap flag.** `bootstrap_complete` is now the

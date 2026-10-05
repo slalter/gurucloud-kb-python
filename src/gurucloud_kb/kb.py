@@ -34,6 +34,7 @@ from gurucloud_kb.types import (
     SearchRequest,
     SearchResult,
     Playbook,
+    PlaybookGenre,
     PlaybookList,
     PlaybookStats,
     PlaybookStatus,
@@ -658,6 +659,7 @@ class KnowledgeBank:
         status: PlaybookStatus | Literal["all"] = "active",
         limit: int = 25,
         min_score: float = 0.0,
+        genre: PlaybookGenre | None = None,
     ) -> PlaybookList:
         """List this bank's playbooks — distinct, named, ordered procedures.
 
@@ -665,6 +667,8 @@ class KnowledgeBank:
         cosine similarity of the query to each playbook's ``title`` +
         ``when_to_use`` and carry a ``score``; without it, newest-updated
         first. ``status="all"`` includes drafts and superseded playbooks.
+        ``genre="procedure"`` lists agent playbooks only, ``genre="process"``
+        the documented client processes only; omitted, both are listed.
 
         Example::
 
@@ -672,11 +676,12 @@ class KnowledgeBank:
             slug = hits["playbooks"][0]["slug"]
             playbook = kb.get_playbook(slug)      # every step, in order
         """
-        return self._http.get(self._path("/playbooks"), params=_pb.list_params(query, status, limit, min_score))
+        return self._http.get(self._path("/playbooks"), params=_pb.list_params(query, status, limit, min_score, genre))
 
-    def get_playbook_stats(self) -> PlaybookStats:
-        """Playbook counts by status (``active`` / ``draft`` / ``superseded``)."""
-        return self._http.get(self._path("/playbook-stats"))
+    def get_playbook_stats(self, *, genre: PlaybookGenre | None = None) -> PlaybookStats:
+        """Playbook counts by status (``active`` / ``draft`` / ``superseded``),
+        optionally for one ``genre`` only."""
+        return self._http.get(self._path("/playbook-stats"), params=_pb.stats_params(genre))
 
     def get_playbook(self, slug: str, *, include_linked_entries: bool = True) -> Playbook:
         """Fetch one playbook whole: every step in order plus the entries its
@@ -698,6 +703,8 @@ class KnowledgeBank:
         change_note: str = "",
         changed_by: str | None = None,
         force: bool = False,
+        genre: PlaybookGenre | None = None,
+        metadata_merge: dict[str, Any] | None = None,
     ) -> PlaybookWriteResult:
         """Create or update the playbook at ``slug`` (versioned).
 
@@ -706,17 +713,32 @@ class KnowledgeBank:
         come from list order. ``status`` and ``metadata`` are preserve-on-absent:
         left as ``None`` they keep the stored values on an existing playbook
         (a new one defaults to ``"active"`` / ``{}``); pass ``metadata={}`` to
-        clear it. Every write snapshots the full playbook into its version
-        history.
+        clear it. To change one key pass ``metadata_merge`` instead: the
+        service sets the given keys on top of the stored metadata and deletes
+        a key given as ``None`` (not together with ``metadata``). A
+        ``metadata`` replace on an existing playbook keeps the reserved keys
+        ``verdicts`` and ``derived_from`` unless you set them to ``None``; the
+        result's ``metadata_kept`` names what was kept. Every write snapshots
+        the full playbook into its version history.
 
-        The bank keeps one playbook per task: a write whose ``when_to_use``
-        overlaps another ACTIVE playbook raises :class:`PlaybookOverlapError`
-        with the candidates. Pass ``supersedes_slug`` to retire the old one in
-        the same write, or ``force=True`` when the tasks really are distinct.
+        The bank keeps one playbook per task: a write that would NEWLY overlap
+        another ACTIVE playbook raises :class:`PlaybookOverlapError` with the
+        candidates. Editing a playbook whose sibling already overlapped it is
+        not refused (the result lists it under ``existing_overlaps``). Pass
+        ``supersedes_slug`` to retire the old one in the same write, or
+        ``force=True`` when the tasks really are distinct.
+
+        ``genre="process"`` writes business process flow DOCUMENTATION instead
+        of an agent procedure: every non-end step then carries
+        ``process={"actor": ..., "system": ..., "hands_to": ...}`` (the
+        service refuses a step without an actor), ``when_to_use`` is what the
+        flow is and what starts it, and the row can never be run. Omitted,
+        the service keeps the stored genre (``procedure`` for a new row).
         """
         body = _pb.upsert_body(
             title=title, when_to_use=when_to_use, steps=steps, summary=summary, status=status,
             supersedes_slug=supersedes_slug, metadata=metadata, change_note=change_note, changed_by=changed_by,
+            genre=genre, metadata_merge=metadata_merge,
         )
         return self._http.put(self._path(f"/playbooks/{slug}") + _qs(_pb.force_params(force)), json=body)
 

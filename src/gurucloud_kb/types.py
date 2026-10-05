@@ -548,6 +548,29 @@ StepKind = Literal["action", "decision", "end"]
 one transition), ``decision`` (two or more conditional transitions) or ``end``."""
 
 
+PlaybookGenre = Literal["procedure", "process"]
+"""What a stored playbook row IS. ``procedure`` (the default) is the agent's own
+ordered procedure, walkable as a run. ``process`` is business process flow
+documentation: how the client's people and systems move one kind of order,
+request or exception from trigger to outcome; it is read to understand and can
+never be started as a run. Business banks serve processes through
+``list_processes`` / ``get_process`` / ``document_process``."""
+
+
+class ProcessStepDetail(TypedDict, total=False):
+    """The documentation fields of one hand-off of a ``process``: who does it on
+    the client side (``actor``, required on every non-end step), in which
+    ``system`` or record, what it ``needs``, who it ``hands_to``, the known
+    ``exceptions`` and the ``source`` (who told us, when)."""
+
+    actor: str
+    system: str
+    needs: str
+    hands_to: str
+    exceptions: str
+    source: str
+
+
 class StepTransition(TypedDict, total=False):
     """One outgoing edge of a step: go ``to`` that step key ``when`` the
     plain-language condition holds; ``limit`` caps a transition back to an
@@ -571,6 +594,8 @@ class PlaybookStepInput(TypedDict, total=False):
     kind: StepKind
     next: list[StepTransition]
     """Outgoing transitions; omitted on a linear step (it flows to the next position)."""
+    process: ProcessStepDetail
+    """Hand-off documentation; only on steps of a ``genre="process"`` row."""
 
 
 class GraphEdge(TypedDict, total=False):
@@ -607,6 +632,7 @@ class PlaybookSummary(TypedDict, total=False):
     when_to_use: str
     summary: str
     status: PlaybookStatus
+    genre: PlaybookGenre
     version: int
     step_count: int
     updated_at: str | None
@@ -638,6 +664,8 @@ class Playbook(TypedDict, total=False):
     when_to_use: str
     summary: str
     status: PlaybookStatus
+    genre: PlaybookGenre
+    """``procedure`` (a playbook) or ``process`` (documentation of the client's flow)."""
     version: int
     supersedes_id: str | None
     created_by: str | None
@@ -650,9 +678,27 @@ class Playbook(TypedDict, total=False):
     """Present on a branching playbook: start node and every edge."""
 
 
+class PlaybookOverlapCandidate(TypedDict, total=False):
+    """Another active playbook that scores near the one being written."""
+
+    id: str
+    slug: str
+    title: str
+    when_to_use: str
+    similarity: float
+    prior_similarity: float | None
+    """Score against the embedding the slug held before this write; None on a create."""
+    already_overlapping: bool
+    """True when the overlap predates this write (it never blocks an update)."""
+
+
 class PlaybookWriteResult(TypedDict, total=False):
     action: Literal["created", "updated"]
     playbook: Playbook
+    metadata_kept: list[str]
+    """Reserved metadata keys (verdicts, derived_from) a replace omitted and the service kept."""
+    existing_overlaps: list[PlaybookOverlapCandidate]
+    """Active siblings that already overlapped this playbook before the write."""
 
 
 class PlaybookVersion(TypedDict, total=False):

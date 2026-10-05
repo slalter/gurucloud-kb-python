@@ -6,17 +6,43 @@
 import { h, mount, clear, toast } from './dom.js';
 import { openModal } from './modal.js';
 import { STEP_KINDS, stepKind, transitionsOf, findStepIndex, cleanStep } from './playbook_graph.js';
+import { GENRE_PROCEDURE, GENRE_PROCESS, PROCESS_STEP_FIELDS, genreOf, processDetailOf, nestProcessFields, processStepsProblem, documentationBanner } from './process_view.js';
 
 const KIND_LABEL = { action: 'Action', decision: 'Decision', end: 'End' };
+const PROCESS_PLACEHOLDER = {
+  actor: 'Actor — who on the client side does this (required)',
+  system: 'System or record it happens in (e.g. Sage)',
+  needs: 'What the step needs to start',
+  hands_to: 'Who or what receives the output',
+  exceptions: 'What goes wrong here and how they handle it',
+  source: 'Who told us / where we saw it, and when',
+};
 
-export function openPlaybookEditor(ctx, existing, { prefill = null, onSaved } = {}) {
+export function openPlaybookEditor(ctx, existing, { prefill = null, onSaved, genre: genreOpt } = {}) {
   const { api } = ctx;
   const isEdit = !!existing;
   const seed = existing || prefill || {};
+  let genre = isEdit ? genreOf(existing) : (genreOpt === GENRE_PROCESS ? GENRE_PROCESS : GENRE_PROCEDURE);
+  const genreSel = h('select', { class: 'kbx-select', dataset: { role: 'genre' } },
+    h('option', { value: GENRE_PROCEDURE }, 'Playbook — a procedure an agent follows'),
+    h('option', { value: GENRE_PROCESS }, 'Process — documentation of how the client operates'));
+  genreSel.value = genre;
+  if (isEdit) genreSel.setAttribute('disabled', '');
+  const isProcessGenre = () => genre === GENRE_PROCESS;
   const slugInput = h('input', { class: 'kbx-input kbx-mono', placeholder: 'lowercase-with-dashes', value: seed.slug || '' });
   if (isEdit) slugInput.setAttribute('readonly', '');
   const titleInput = h('input', { class: 'kbx-input', value: seed.title || '', placeholder: 'Human-readable name (3–200 chars)' });
   const whenInput = h('textarea', { class: 'kbx-textarea', rows: '3', placeholder: 'When should an agent reach for this? (min 10 chars — this is the retrieval key)' }, seed.when_to_use || '');
+  const whenLabel = h('label', {}, 'When to use');
+  const processNote = h('div', { class: 'kbx-alert warn', dataset: { role: 'process-note' }, style: { marginBottom: '14px' } }, h('i', { class: 'bi bi-info-circle' }), h('div', {}, documentationBanner()));
+  function syncGenre() {
+    const p = isProcessGenre();
+    whenLabel.textContent = p ? 'About' : 'When to use';
+    whenInput.placeholder = p ? 'What this flow is and what starts it, in the client\'s terms (min 10 chars — this is the retrieval key)' : 'When should an agent reach for this? (min 10 chars — this is the retrieval key)';
+    processNote.style.display = p ? '' : 'none';
+    stepRows.forEach((r) => { r.processBlock.style.display = p ? '' : 'none'; r.bodyI.placeholder = p ? 'What happens at this hand-off, in the client\'s terms' : 'What to do in this step'; });
+  }
+  genreSel.addEventListener('change', () => { genre = genreSel.value === GENRE_PROCESS ? GENRE_PROCESS : GENRE_PROCEDURE; syncGenre(); });
   const summaryInput = h('textarea', { class: 'kbx-textarea', rows: '2', placeholder: 'Optional one-line summary' }, seed.summary || '');
   const statusSel = h('select', { class: 'kbx-select' },
     h('option', { value: 'active' }, 'Active'), h('option', { value: 'draft' }, 'Draft'), h('option', { value: 'superseded' }, 'Superseded'));
@@ -35,7 +61,16 @@ export function openPlaybookEditor(ctx, existing, { prefill = null, onSaved } = 
     const kindSel = h('select', { class: 'kbx-select', dataset: { role: 'step-kind' } }, ...STEP_KINDS.map((k) => h('option', { value: k }, KIND_LABEL[k])));
     kindSel.value = stepKind(step);
     const transHost = h('div', { dataset: { role: 'transitions' } });
-    const row = { id: ++rowSeq, titleI, bodyI, entryI, keyI, kindSel, transHost, transitions: [], seedNext: transitionsOf(step) };
+    const detail = processDetailOf(step);
+    const processInputs = {};
+    PROCESS_STEP_FIELDS.forEach(([field]) => {
+      processInputs[field] = h('input', { class: 'kbx-input', dataset: { role: `process-${field}` }, placeholder: PROCESS_PLACEHOLDER[field], value: detail[field] || '' });
+    });
+    const processBlock = h('div', { class: 'kbx-field', dataset: { role: 'process-fields' }, style: { marginBottom: '8px', display: 'none' } },
+      h('div', { class: 'kbx-field-row', style: { marginBottom: '8px' } }, h('div', { class: 'kbx-field', style: { marginBottom: 0 } }, processInputs.actor), h('div', { class: 'kbx-field', style: { marginBottom: 0 } }, processInputs.system)),
+      h('div', { class: 'kbx-field-row', style: { marginBottom: '8px' } }, h('div', { class: 'kbx-field', style: { marginBottom: 0 } }, processInputs.needs), h('div', { class: 'kbx-field', style: { marginBottom: 0 } }, processInputs.hands_to)),
+      h('div', { class: 'kbx-field-row', style: { marginBottom: 0 } }, h('div', { class: 'kbx-field', style: { marginBottom: 0 } }, processInputs.exceptions), h('div', { class: 'kbx-field', style: { marginBottom: 0 } }, processInputs.source)));
+    const row = { id: ++rowSeq, titleI, bodyI, entryI, keyI, kindSel, transHost, processInputs, processBlock, transitions: [], seedNext: transitionsOf(step) };
     stepRows.push(row);
     const addTransBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { role: 'add-transition' }, onClick: () => addTransition(row, null, null) }, h('i', { class: 'bi bi-plus-lg' }), 'Add transition');
     row.transBlock = h('div', { class: 'kbx-field', style: { marginTop: '8px', marginBottom: 0 } },
@@ -47,6 +82,7 @@ export function openPlaybookEditor(ctx, existing, { prefill = null, onSaved } = 
       h('div', { class: 'kbx-row-between', style: { marginBottom: '8px' } }, h('span', { class: 'kbx-chip', dataset: { role: 'stepnum' } }, '#'), h('div', { class: 'kbx-row', style: { gap: '4px' } }, upBtn, downBtn, removeBtn)),
       h('div', { class: 'kbx-field-row', style: { marginBottom: '8px' } }, h('div', { class: 'kbx-field', style: { marginBottom: 0 } }, kindSel), h('div', { class: 'kbx-field', style: { marginBottom: 0 } }, keyI)),
       h('div', { class: 'kbx-field', style: { marginBottom: '8px' } }, titleI),
+      processBlock,
       h('div', { class: 'kbx-field', style: { marginBottom: '8px' } }, bodyI),
       h('div', { class: 'kbx-field', style: { marginBottom: 0 } }, entryI),
       row.transBlock);
@@ -56,6 +92,8 @@ export function openPlaybookEditor(ctx, existing, { prefill = null, onSaved } = 
     titleI.addEventListener('input', refreshTargets);
     stepsHost.append(node);
     syncKind(row);
+    processBlock.style.display = isProcessGenre() ? '' : 'none';
+    if (isProcessGenre()) bodyI.placeholder = 'What happens at this hand-off, in the client\'s terms';
     renumber();
   }
   function syncKind(row) { row.transBlock.style.display = row.kindSel.value === 'end' ? 'none' : ''; }
@@ -120,29 +158,38 @@ export function openPlaybookEditor(ctx, existing, { prefill = null, onSaved } = 
     const kept = stepRows.filter((r) => r.titleI.value.trim() || r.bodyI.value.trim());
     const live = (r) => r.kindSel.value !== 'end' ? r.transitions.filter((tr) => tr.target && kept.includes(tr.target)) : [];
     kept.forEach((r) => live(r).forEach((tr) => ensureKey(tr.target, kept)));
-    return kept.map((r) => cleanStep({
-      title: r.titleI.value.trim(), body: r.bodyI.value.trim(), kb_entry_id: r.entryI.value.trim() || null,
-      key: r.keyI.value, kind: r.kindSel.value,
-      next: live(r).map((tr) => ({ to: tr.target.keyI.value.trim(), when: tr.whenI.value, limit: tr.limitI.value })),
-    }));
+    return kept.map((r) => {
+      const flat = {};
+      Object.entries(r.processInputs).forEach(([field, input]) => { flat[field] = input.value; });
+      const process = isProcessGenre() ? nestProcessFields(flat) : {};
+      return cleanStep({
+        title: r.titleI.value.trim(), body: r.bodyI.value.trim(), kb_entry_id: r.entryI.value.trim() || null,
+        key: r.keyI.value, kind: r.kindSel.value,
+        next: live(r).map((tr) => ({ to: tr.target.keyI.value.trim(), when: tr.whenI.value, limit: tr.limitI.value })),
+        process,
+      });
+    });
   }
 
   const overlapHost = h('div', {});
   const body = h('div', {},
     prefill && !isEdit ? h('div', { class: 'kbx-alert info', style: { marginBottom: '14px' } }, h('i', { class: 'bi bi-magic' }), h('div', {}, h('strong', {}, 'Draft from an entry. '), 'Steps were split from the entry’s own sentences; merge, reorder and reword before saving. Step 1 links back to the source entry.')) : null,
+    h('div', { class: 'kbx-field' }, h('label', {}, 'Kind'), genreSel, h('div', { class: 'kbx-hint' }, isEdit ? 'Kind is fixed once written.' : 'A playbook is the agent\'s own procedure; a process documents the client\'s flow and is never run.')),
+    processNote,
     h('div', { class: 'kbx-field-row' },
-      h('div', { class: 'kbx-field' }, h('label', {}, 'Slug'), slugInput, h('div', { class: 'kbx-hint' }, isEdit ? 'Slug is fixed for an existing playbook.' : 'Unique id, e.g. deploy-prod.')),
+      h('div', { class: 'kbx-field' }, h('label', {}, 'Slug'), slugInput, h('div', { class: 'kbx-hint' }, isEdit ? 'Slug is fixed for an existing record.' : 'Unique id, e.g. deploy-prod or product-return-processing.')),
       h('div', { class: 'kbx-field' }, h('label', {}, 'Status'), statusSel)),
     h('div', { class: 'kbx-field' }, h('label', {}, 'Title'), titleInput),
-    h('div', { class: 'kbx-field' }, h('label', {}, 'When to use'), whenInput),
+    h('div', { class: 'kbx-field' }, whenLabel, whenInput),
     h('div', { class: 'kbx-field' }, h('label', {}, 'Summary'), summaryInput),
     h('div', { class: 'kbx-row-between kbx-mt' }, h('h4', { style: { margin: 0, fontSize: '14px' } }, 'Steps'), h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', onClick: () => addStep(null) }, h('i', { class: 'bi bi-plus-lg' }), 'Add step')),
     h('div', { class: 'kbx-mt' }, noticeHost, stepsHost),
     h('div', { class: 'kbx-field kbx-mt' }, h('label', {}, 'Change note'), noteInput),
     overlapHost);
 
-  const saveBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button' }, isEdit ? 'Save changes' : 'Create playbook');
-  const ref = openModal({ title: isEdit ? `Edit "${existing.title}"` : (prefill ? 'New playbook from entry' : 'New playbook'), wide: true, body, footer: [h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', onClick: () => ref.close() }, 'Cancel'), saveBtn] });
+  syncGenre();
+  const saveBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button' }, isEdit ? 'Save changes' : 'Create');
+  const ref = openModal({ title: isEdit ? `Edit "${existing.title}"` : (prefill ? 'New playbook from entry' : 'New playbook or process'), wide: true, body, footer: [h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', onClick: () => ref.close() }, 'Cancel'), saveBtn] });
 
   async function doSave(force) {
     const slug = slugInput.value.trim();
@@ -150,16 +197,17 @@ export function openPlaybookEditor(ctx, existing, { prefill = null, onSaved } = 
     const when = whenInput.value.trim();
     if (!slug) { toast('Slug is required', 'warning'); return; }
     if (title.length < 3) { toast('Title must be at least 3 characters', 'warning'); return; }
-    if (when.length < 10) { toast('“When to use” must be at least 10 characters', 'warning'); return; }
+    if (when.length < 10) { toast(`“${isProcessGenre() ? 'About' : 'When to use'}” must be at least 10 characters`, 'warning'); return; }
     const steps = collectSteps();
     if (!steps.length) { toast('Add at least one step', 'warning'); return; }
     for (const s of steps) { if (!s.title || !s.body) { toast('Every step needs a title and body', 'warning'); return; } }
-    const payload = { title, when_to_use: when, summary: summaryInput.value.trim(), steps, status: statusSel.value, change_note: noteInput.value.trim(), changed_by: 'explorer' };
+    if (isProcessGenre()) { const problem = processStepsProblem(steps); if (problem) { toast(problem, 'warning'); return; } }
+    const payload = { title, when_to_use: when, summary: summaryInput.value.trim(), steps, status: statusSel.value, change_note: noteInput.value.trim(), changed_by: 'explorer', genre };
     clear(overlapHost);
     saveBtn.classList.add('is-loading');
     try {
       const result = await api.upsertPlaybook(slug, payload, force ? { force: true } : undefined);
-      toast(isEdit ? 'Playbook saved' : 'Playbook created', 'success');
+      toast(isEdit ? 'Saved' : (isProcessGenre() ? 'Process documented' : 'Playbook created'), 'success');
       ref.close();
       if (onSaved) onSaved(result, slug);
     } catch (e) {

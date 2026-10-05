@@ -81,14 +81,17 @@ from gurucloud_kb.types import (
     LinkedEntry,
     OverlapCandidate,
     Playbook,
+    PlaybookGenre,
     PlaybookList,
     PlaybookStats,
     PlaybookStatus,
     PlaybookStep,
     PlaybookStepInput,
     PlaybookSummary,
+    ProcessStepDetail,
     PlaybookRun,
     PlaybookVersion,
+    PlaybookOverlapCandidate,
     PlaybookWriteResult,
     RunList,
     RunState,
@@ -169,13 +172,16 @@ __all__ = [
     "EntryEventLogList",
     # Playbooks
     "Playbook",
+    "PlaybookGenre",
     "PlaybookList",
     "PlaybookStats",
     "PlaybookStatus",
     "PlaybookStep",
     "PlaybookStepInput",
     "PlaybookSummary",
+    "ProcessStepDetail",
     "PlaybookVersion",
+    "PlaybookOverlapCandidate",
     "PlaybookWriteResult",
     # Playbook runs
     "PlaybookRun",
@@ -191,4 +197,4 @@ __all__ = [
     "OverlapCandidate",
 ]
 
-__version__ = "0.5.3"
+__version__ = "0.5.5"

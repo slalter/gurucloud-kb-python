@@ -123,5 +123,6 @@ export function cleanStep(step) {
   if (stepKind(step) !== 'action') out.kind = stepKind(step);
   const next = transitionsOf(step).map(cleanTransition);
   if (next.length && stepKind(step) !== 'end') out.next = next;
+  if (step.process && typeof step.process === 'object' && Object.keys(step.process).length) out.process = { ...step.process };
   return out;
 }

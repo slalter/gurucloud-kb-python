@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlencode
 
-from gurucloud_kb.types import PlaybookStatus, PlaybookStepInput, RunState
+from gurucloud_kb.types import PlaybookGenre, PlaybookStatus, PlaybookStepInput, RunState
 
 
 def list_params(
@@ -13,13 +13,21 @@ def list_params(
     status: PlaybookStatus | str,
     limit: int,
     min_score: float,
+    genre: PlaybookGenre | None = None,
 ) -> dict[str, Any]:
     params: dict[str, Any] = {"status": status, "limit": limit}
     if query:
         params["query"] = query
     if min_score:
         params["min_score"] = min_score
+    if genre:
+        params["genre"] = genre
     return params
+
+
+def stats_params(genre: PlaybookGenre | None) -> dict[str, Any] | None:
+    """Query for GET /playbook-stats: only a genre filter, only when given."""
+    return {"genre": genre} if genre else None
 
 
 def upsert_body(
@@ -33,12 +41,18 @@ def upsert_body(
     metadata: dict[str, Any] | None,
     change_note: str,
     changed_by: str | None,
+    genre: PlaybookGenre | None = None,
+    metadata_merge: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Wire body for PUT /playbooks/{slug}.
 
     ``status`` / ``metadata`` are sent ONLY when given: the service keeps the
     stored values for an existing slug when they are absent (and defaults a
     new playbook to ``active`` / ``{}``). Sending ``{}`` clears metadata.
+    ``metadata_merge`` is the patch form (set keys, null deletes) and is sent
+    only when given; the service refuses it together with ``metadata``.
+    ``genre`` is sent only when given (the service defaults a new row to
+    ``procedure``); a step's ``process`` detail travels inside the step dict.
     """
     body: dict[str, Any] = {
         "title": title,
@@ -47,10 +61,14 @@ def upsert_body(
         "summary": summary,
         "change_note": change_note,
     }
+    if genre:
+        body["genre"] = genre
     if status is not None:
         body["status"] = status
     if metadata is not None:
         body["metadata"] = dict(metadata)
+    if metadata_merge is not None:
+        body["metadata_merge"] = dict(metadata_merge)
     if supersedes_slug:
         body["supersedes_slug"] = supersedes_slug
     if changed_by:

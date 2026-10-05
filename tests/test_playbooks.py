@@ -146,6 +146,21 @@ class TestSyncPlaybooks:
         body = json.loads(route.calls.last.request.content)
         assert body["status"] == "draft" and body["metadata"] == {}
 
+    def test_upsert_sends_metadata_merge_only_when_given(self, kb) -> None:
+        route = respx.put(f"{API_PREFIX}/banks/kb-1/playbooks/pm-sweep").mock(
+            return_value=httpx.Response(200, json={"data": {
+                "action": "updated", "playbook": PLAYBOOK, "metadata_kept": [],
+                "existing_overlaps": [{"slug": "gas", "title": "g", "similarity": 0.89, "prior_similarity": 0.89, "already_overlapping": True}],
+            }})
+        )
+        out = kb.upsert_playbook(
+            "pm-sweep", title="PM sweep", when_to_use="hourly filing of cards", steps=[{"title": "a", "body": "b"}],
+            metadata_merge={"proposal": 195, "seeded_by": None},
+        )
+        body = json.loads(route.calls.last.request.content)
+        assert body["metadata_merge"] == {"proposal": 195, "seeded_by": None} and "metadata" not in body
+        assert out.get("existing_overlaps", [])[0].get("slug") == "gas"
+
     def test_delete_forwards_reason_and_changed_by(self, kb) -> None:
         route = respx.delete(f"{API_PREFIX}/banks/kb-1/playbooks/pm-sweep").mock(
             return_value=httpx.Response(200, json={"data": {"deleted": True, "slug": "pm-sweep", "tombstone_version": 4}})
@@ -192,16 +207,18 @@ class TestAsyncPlaybooks:
             async with AsyncGuruCloudClient(api_key=API_KEY, base_url=BASE_URL) as client:
                 kb = await client.get_kb("kb-1")
                 out = await kb.list_playbooks("file cards")
-                assert out["playbooks"][0]["slug"] == "pm-sweep"
+                assert (out.get("playbooks") or [])[0].get("slug") == "pm-sweep"
                 assert dict(list_route.calls.last.request.url.params) == {"status": "active", "limit": "25", "query": "file cards"}
                 pb = await kb.get_playbook("pm-sweep")
-                assert len(pb["steps"]) == 2
+                assert len(pb.get("steps") or []) == 2
                 res = await kb.upsert_playbook("pm-sweep", title="PM sweep", when_to_use="hourly filing of cards", steps=[{"title": "a", "body": "b"}])
-                assert res["action"] == "updated"
+                assert res.get("action") == "updated"
                 put_body = json.loads(put_route.calls.last.request.content)
                 assert put_body["steps"] == [{"title": "a", "body": "b"}]
-                assert "status" not in put_body and "metadata" not in put_body
+                assert "status" not in put_body and "metadata" not in put_body and "metadata_merge" not in put_body
                 assert dict(put_route.calls.last.request.url.params) == {"force": "false"}
+                await kb.upsert_playbook("pm-sweep", title="PM sweep", when_to_use="hourly filing of cards", steps=[{"title": "a", "body": "b"}], metadata_merge={"n": 1})
+                assert json.loads(put_route.calls.last.request.content)["metadata_merge"] == {"n": 1}
                 del_route = respx.delete(f"{API_PREFIX}/banks/kb-1/playbooks/pm-sweep").mock(
                     return_value=httpx.Response(200, json={"data": {"deleted": True, "slug": "pm-sweep", "tombstone_version": 3}})
                 )
@@ -210,3 +227,89 @@ class TestAsyncPlaybooks:
                 with pytest.raises(PlaybookOverlapError) as exc:
                     await kb.upsert_playbook("dup", title="t", when_to_use="hourly filing", steps=[{"title": "a", "body": "b"}])
                 assert exc.value.candidates[0]["slug"] == "pm-sweep"
+
+
+PROCESS = {
+    **PLAYBOOK,
+    "slug": "product-return-processing",
+    "title": "How a product return moves through ChemMasters",
+    "when_to_use": "A sales rep asks for product back; the return runs from CS entry to disposition",
+    "genre": "process",
+    "steps": [
+        {"position": 1, "title": "Rep asks for the return", "body": "The rep brings it to CS", "kb_entry_id": None,
+         "process": {"actor": "sales rep", "hands_to": "customer service"}},
+        {"position": 2, "title": "CS logs it", "body": "R-number from the purple book, then Sage", "kb_entry_id": "e-2",
+         "process": {"actor": "Emily Adams (customer service)", "system": "purple book, Sage", "hands_to": "warehouse"}},
+    ],
+}
+
+
+class TestProcessGenre:
+    """genre (procedure | process) on the wire, and a process step's detail round trip."""
+
+    def test_list_and_stats_pass_genre_only_when_given(self, kb) -> None:
+        list_route = respx.get(f"{API_PREFIX}/banks/kb-1/playbooks").mock(
+            return_value=httpx.Response(200, json={"data": {"playbooks": [PROCESS], "total_active": 1}})
+        )
+        stats_route = respx.get(f"{API_PREFIX}/banks/kb-1/playbook-stats").mock(
+            return_value=httpx.Response(200, json={"data": {"active": 1, "draft": 0, "superseded": 0}})
+        )
+        out = kb.list_playbooks(genre="process")
+        assert dict(list_route.calls.last.request.url.params) == {"status": "active", "limit": "25", "genre": "process"}
+        assert out["playbooks"][0]["genre"] == "process"
+        kb.list_playbooks()
+        assert "genre" not in dict(list_route.calls.last.request.url.params)
+        kb.get_playbook_stats(genre="procedure")
+        assert dict(stats_route.calls.last.request.url.params) == {"genre": "procedure"}
+        kb.get_playbook_stats()
+        assert dict(stats_route.calls.last.request.url.params) == {}
+
+    def test_upsert_process_sends_genre_and_step_detail(self, kb) -> None:
+        route = respx.put(f"{API_PREFIX}/banks/kb-1/playbooks/product-return-processing").mock(
+            return_value=httpx.Response(200, json={"data": {"action": "created", "playbook": PROCESS}})
+        )
+        steps = [
+            {"title": "Rep asks for the return", "body": "The rep brings it to CS", "process": {"actor": "sales rep", "hands_to": "customer service"}},
+            {"title": "CS logs it", "body": "R-number, then Sage", "kb_entry_id": "e-2", "process": {"actor": "Emily Adams (customer service)", "system": "purple book, Sage"}},
+        ]
+        out = kb.upsert_playbook(
+            "product-return-processing", title=PROCESS["title"], when_to_use=PROCESS["when_to_use"], steps=steps, genre="process",
+        )
+        body = json.loads(route.calls.last.request.content)
+        assert body["genre"] == "process"
+        assert body["steps"] == steps  # the process detail travels inside each step, untouched
+        assert out["playbook"]["genre"] == "process"
+        assert out["playbook"]["steps"][1]["process"]["actor"] == "Emily Adams (customer service)"
+
+    def test_upsert_without_genre_keeps_the_old_wire_shape(self, kb) -> None:
+        route = respx.put(f"{API_PREFIX}/banks/kb-1/playbooks/pm-sweep").mock(
+            return_value=httpx.Response(200, json={"data": {"action": "updated", "playbook": PLAYBOOK}})
+        )
+        kb.upsert_playbook("pm-sweep", title="PM sweep", when_to_use="hourly filing of cards", steps=[{"title": "a", "body": "b"}])
+        assert "genre" not in json.loads(route.calls.last.request.content)
+
+    @pytest.mark.asyncio
+    async def test_async_mirror_passes_genre(self) -> None:
+        async with respx.mock:
+            _kb_route()
+            list_route = respx.get(f"{API_PREFIX}/banks/kb-1/playbooks").mock(
+                return_value=httpx.Response(200, json={"data": {"playbooks": [PROCESS], "total_active": 1}})
+            )
+            stats_route = respx.get(f"{API_PREFIX}/banks/kb-1/playbook-stats").mock(
+                return_value=httpx.Response(200, json={"data": {"active": 1, "draft": 0, "superseded": 0}})
+            )
+            put_route = respx.put(f"{API_PREFIX}/banks/kb-1/playbooks/product-return-processing").mock(
+                return_value=httpx.Response(200, json={"data": {"action": "created", "playbook": PROCESS}})
+            )
+            async with AsyncGuruCloudClient(api_key=API_KEY, base_url=BASE_URL) as client:
+                kb = await client.get_kb("kb-1")
+                await kb.list_playbooks("returns", genre="process")
+                assert dict(list_route.calls.last.request.url.params)["genre"] == "process"
+                await kb.get_playbook_stats(genre="process")
+                assert dict(stats_route.calls.last.request.url.params) == {"genre": "process"}
+                res = await kb.upsert_playbook(
+                    "product-return-processing", title="t", when_to_use="a flow and its trigger",
+                    steps=[{"title": "a", "body": "b", "process": {"actor": "CS"}}], genre="process",
+                )
+                assert json.loads(put_route.calls.last.request.content)["genre"] == "process"
+                assert (res.get("playbook") or {}).get("genre") == "process"

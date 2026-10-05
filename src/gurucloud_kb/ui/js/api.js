@@ -126,7 +126,7 @@ export function createApi(kbId, base, opts = {}) {
     listEventLogs: (params) => req('GET', '/event-logs', { params }),
     // playbooks
     listPlaybooks: (params) => req('GET', '/playbooks', { params }),
-    playbookStats: () => req('GET', '/playbook-stats'),
+    playbookStats: (params) => req('GET', '/playbook-stats', { params }),
     getPlaybook: (slug, params) => req('GET', `/playbooks/${encodeURIComponent(slug)}`, { params }),
     upsertPlaybook: (slug, body, params) => req('PUT', `/playbooks/${encodeURIComponent(slug)}`, { body, params }),
     deletePlaybook: (slug, params) => req('DELETE', `/playbooks/${encodeURIComponent(slug)}`, { params }),
