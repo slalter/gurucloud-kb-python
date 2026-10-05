@@ -524,6 +524,12 @@ class Ledger:
             open_runs = int(cur.fetchone()[0])
             cur.execute("SELECT state, count(*) FROM consolidations GROUP BY state")
             groups = {r[0]: int(r[1]) for r in cur.fetchall()}
+        # ``bootstrap_complete`` is the ``bootstrap_complete_at`` watermark — the same
+        # authority ``derive_mode`` and ``pr_budget`` read — so the summary cannot
+        # contradict itself on a repository whose crawl inventory is empty (kanban
+        # 50f62bba). ``crawl_drained`` is the crawl-side fact on its own: nothing
+        # pending (vacuously true when nothing was ever a candidate).
         return {"crawl_items": crawl, "pairs": pairs, "groups": groups, "open_runs": open_runs,
-                "bootstrap_complete": crawl.get("pending", 0) == 0 and bool(crawl),
+                "bootstrap_complete": self.get_watermark("bootstrap_complete_at") is not None,
+                "crawl_drained": crawl.get("pending", 0) == 0,
                 "pr_budget": self.pr_budget()}

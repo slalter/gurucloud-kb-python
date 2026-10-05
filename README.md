@@ -826,6 +826,15 @@ edit the harness, they file a card.
 
 ## Changelog
 
+### 0.5.3
+
+- **modreg: `ledger summary` bootstrap flag.** `bootstrap_complete` is now the
+  `bootstrap_complete_at` watermark (the same authority as `pr_budget` and the
+  run mode), so a repository with nothing to register no longer reports
+  `bootstrap_complete: false` beside `pr_budget.bootstrap_complete: true`.
+  The crawl-side fact is reported separately as `crawl_drained` (no pending
+  crawl items).
+
 ### 0.5.2
 
 - **Verdict vocabulary.** A playbook may declare the verdicts its steps are
