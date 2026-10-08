@@ -134,6 +134,30 @@ class SchemaWarning(TypedDict, total=False):
 # ── Entries ─────────────────────────────────────────────────────
 
 
+class EntryUpdate(TypedDict, total=False):
+    """Body of an in-place entry update, keyed by the server's field names.
+
+    Built for you by ``kb.update_entry(entry_id, content=..., metadata=...)``;
+    pass it directly as ``updates`` only when you already speak the server's
+    vocabulary. Any other key is refused (``ValueError`` client-side, 400
+    ``unknown_field`` / ``validation_error`` server-side).
+    """
+
+    update_content: str
+    """Replace the entry's primary text (``content`` on the default schema,
+    the schema's primary dimension on a custom one); re-embedded."""
+    update_useful_for: str
+    """Replace ``useful_for``; re-embedded where the schema defines it."""
+    update_metadata: dict[str, Any]
+    """Shallow-merge into the stored metadata (new keys win, others kept)."""
+    replace_systems: list[str]
+    replace_tasks: list[str]
+    add_systems: list[str]
+    remove_systems: list[str]
+    add_tasks: list[str]
+    remove_tasks: list[str]
+
+
 class EntryInput(TypedDict, total=False):
     """Input for adding a KB entry."""
 

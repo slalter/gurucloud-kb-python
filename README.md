@@ -193,6 +193,31 @@ from the agent-facing MCP `report_learning` tool, which **queues** the write
 to confirm a queued write landed is configurable per deployment (off by
 default).
 
+### Update an entry in place
+
+`update_entry` changes an existing entry and re-embeds what changed, so there
+is no need to delete and re-add. Pass the typed keyword arguments:
+
+```python
+kb.update_entry(
+    entry_id,
+    content="Login loops back to the sign-in page after SSO (Okta tenants only)",
+    metadata={"status": "dismissed"},        # merged: other keys are kept
+    systems=["gateway", "okta"],             # full replacement of relevant_systems
+)
+kb.update_entry(entry_id, add_tasks=["sso-triage"], remove_tasks=["onboarding"])
+```
+
+`content=` lands in the schema's primary dimension (`content` on the default
+schema, e.g. `observation` on a custom one). `metadata=` is a shallow merge.
+`systems=` / `tasks=` replace the whole tag list; `add_*` / `remove_*` edit it.
+A raw `updates` mapping keyed by the server's field names (`update_content`,
+`update_useful_for`, `update_metadata`, `replace_systems`, `replace_tasks`,
+`add_systems`, `remove_systems`, `add_tasks`, `remove_tasks`) is still
+accepted. Any other key raises `ValueError` before the request is sent, and
+the server rejects it as well (400 `unknown_field`); until 0.5.6 such keys
+were silently ignored while the call still returned success.
+
 ---
 
 ## Search
@@ -825,6 +850,19 @@ edit the harness, they file a card.
 ---
 
 ## Changelog
+
+### 0.5.6
+
+- **`update_entry` has typed keyword arguments and refuses unknown fields.**
+  `kb.update_entry(entry_id, content=..., useful_for=..., metadata=...,
+  systems=..., tasks=..., add_systems=..., remove_systems=..., add_tasks=...,
+  remove_tasks=...)` (sync and async) maps to the server's update fields;
+  `metadata=` merges. The raw `updates` mapping is still accepted, but a key
+  outside the server's vocabulary now raises `ValueError` client-side, as does
+  giving a field both ways or giving nothing to change. New `EntryUpdate`
+  type. Matches the hosted API and kb-platform images built after 1.6.0, which
+  now reject unknown update fields (400 `unknown_field` / `validation_error`) instead of
+  ignoring them and answering success.
 
 ### 0.5.5
 

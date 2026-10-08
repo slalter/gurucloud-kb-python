@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, Mapping, Optional
 
 from gurucloud_kb._async_http import AsyncHTTPClient
 from gurucloud_kb import _playbooks as _pb
+from gurucloud_kb._entries import build_entry_update
 from gurucloud_kb._playbooks import qs as _qs
 from gurucloud_kb._search import build_expanded_search, build_string_search, normalize_search_request
 from gurucloud_kb.types import (
@@ -201,9 +202,58 @@ class AsyncKnowledgeBank:
         """Get a single entry by ID."""
         return await self._http.get(self._path(f"/entries/{entry_id}"))
 
-    async def update_entry(self, entry_id: str, updates: dict[str, Any]) -> EntryResult:
-        """Update an entry's dimensions."""
-        return await self._http.patch(self._path(f"/entries/{entry_id}"), json=updates)
+    async def update_entry(
+        self,
+        entry_id: str,
+        updates: Optional[Mapping[str, Any]] = None,
+        *,
+        content: Optional[str] = None,
+        useful_for: Optional[str] = None,
+        metadata: Optional[Mapping[str, Any]] = None,
+        systems: Optional[list[str]] = None,
+        tasks: Optional[list[str]] = None,
+        add_systems: Optional[list[str]] = None,
+        remove_systems: Optional[list[str]] = None,
+        add_tasks: Optional[list[str]] = None,
+        remove_tasks: Optional[list[str]] = None,
+    ) -> EntryResult:
+        """Update an entry in place (re-embedding what changed).
+
+        Args:
+            entry_id: The entry to change (full id or unique prefix).
+            updates: Optional raw body keyed by the server's field names
+                (:class:`~gurucloud_kb.types.EntryUpdate`). Unknown keys
+                raise ``ValueError`` here; the server rejects them too.
+            content: New primary text (``content`` on the default schema,
+                the primary dimension on a custom one).
+            useful_for: New ``useful_for`` text.
+            metadata: Keys to MERGE into the stored metadata (shallow; new
+                values override, other keys are kept).
+            systems / tasks: Full replacement of ``relevant_systems`` /
+                ``relevant_tasks``.
+            add_systems / remove_systems / add_tasks / remove_tasks:
+                Incremental tag edits.
+
+        Returns:
+            The server's result (``{"success": true, ...}``).
+
+        Raises:
+            ValueError: unknown key in ``updates``, a field given both ways,
+                or nothing to change.
+        """
+        body = build_entry_update(
+            updates,
+            content=content,
+            useful_for=useful_for,
+            metadata=metadata,
+            systems=systems,
+            tasks=tasks,
+            add_systems=add_systems,
+            remove_systems=remove_systems,
+            add_tasks=add_tasks,
+            remove_tasks=remove_tasks,
+        )
+        return await self._http.patch(self._path(f"/entries/{entry_id}"), json=body)
 
     async def delete_entry(self, entry_id: str) -> dict[str, Any]:
         """Delete an entry."""

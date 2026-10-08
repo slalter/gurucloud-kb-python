@@ -72,6 +72,7 @@ from gurucloud_kb.types import (
     EntryEventLogList,
     EntryInput,
     EntryResult,
+    EntryUpdate,
     KBInfo,
     MCPServerAuth,
     MCPServerDefinition,
@@ -148,6 +149,7 @@ __all__ = [
     "SchemaWarning",
     "EntryInput",
     "EntryResult",
+    "EntryUpdate",
     "DimensionQuery",
     "SearchRequest",
     "SearchResult",
@@ -197,4 +199,4 @@ __all__ = [
     "OverlapCandidate",
 ]
 
-__version__ = "0.5.5"
+__version__ = "0.5.6"
