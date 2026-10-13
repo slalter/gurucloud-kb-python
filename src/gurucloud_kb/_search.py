@@ -142,6 +142,7 @@ def normalize_search_request(request: Mapping[str, Any]) -> dict[str, Any]:
 
 EXPANDED_SEARCH_OPTION_KEYS = (
     "metadata_filters",
+    "source",
     "category_filters",
     "combination_mode",
     "explain",
@@ -185,3 +186,48 @@ def build_expanded_search(
         if key in options and options[key] is not None:
             req[key] = options[key]
     return req
+
+
+# ── entries list ────────────────────────────────────────────────
+
+
+def build_list_params(
+    *,
+    limit: int,
+    offset: int,
+    metadata_filters: Optional[Mapping[str, Any]] = None,
+    source: Optional[str] = None,
+    created_after: Optional[DateInput] = None,
+    created_before: Optional[DateInput] = None,
+    updated_after: Optional[DateInput] = None,
+    updated_before: Optional[DateInput] = None,
+    event_after: Optional[DateInput] = None,
+    event_before: Optional[DateInput] = None,
+) -> dict[str, Any]:
+    """Query parameters of ``GET /banks/{kb}/entries``.
+
+    ``metadata_filters`` goes on the wire as a compact JSON object (the same
+    containment semantics as the search bodies); ``source`` and the time
+    bounds as plain strings. Unset filters are left out so an unfiltered call
+    is byte-for-byte what older SDKs sent.
+    """
+    import json
+
+    params: dict[str, Any] = {"limit": limit, "offset": offset}
+    if metadata_filters:
+        params["metadata_filters"] = json.dumps(dict(metadata_filters), separators=(",", ":"))
+    if source is not None:
+        params["source"] = source
+    bounds = {
+        "created_after": created_after,
+        "created_before": created_before,
+        "updated_after": updated_after,
+        "updated_before": updated_before,
+        "event_after": event_after,
+        "event_before": event_before,
+    }
+    for key, val in bounds.items():
+        iso = _iso(val)
+        if iso is not None:
+            params[key] = iso
+    return params

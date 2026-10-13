@@ -73,6 +73,11 @@ from gurucloud_kb.types import (
     EntryInput,
     EntryResult,
     EntryUpdate,
+    FacetValueType,
+    MetadataFacet,
+    MetadataFacetValue,
+    MetadataFacets,
+    SourceFacet,
     KBInfo,
     MCPServerAuth,
     MCPServerDefinition,
@@ -149,6 +154,11 @@ __all__ = [
     "SchemaWarning",
     "EntryInput",
     "EntryResult",
+    "FacetValueType",
+    "MetadataFacet",
+    "MetadataFacetValue",
+    "MetadataFacets",
+    "SourceFacet",
     "EntryUpdate",
     "DimensionQuery",
     "SearchRequest",
@@ -199,4 +209,4 @@ __all__ = [
     "OverlapCandidate",
 ]
 
-__version__ = "0.5.6"
+__version__ = "0.6.0"

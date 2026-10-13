@@ -60,13 +60,20 @@ export function writeSpeedPref(storage, kbId, speed) {
   }
 }
 
-/** Body for POST /search/expanded. Returns null for a blank query. */
-export function buildExpandedPayload({ query, k, threshold, filters, speed }) {
+/** Body for POST /search/expanded. Returns null for a blank query.
+    `filters` is the metadata_filters object; `hardFilters` carries the other
+    non-semantic fields (source, created_after, created_before …) from
+    facet_filters.searchFilterFields, copied as they are. */
+export function buildExpandedPayload({ query, k, threshold, filters, speed, hardFilters }) {
   const q = String(query || '').trim();
   if (!q) return null;
   const payload = { query: q, k, threshold: Number.isFinite(threshold) ? threshold : 0 };
   if (SPEEDS.includes(speed)) payload.speed = speed;
   if (filters && Object.keys(filters).length) payload.metadata_filters = { ...filters };
+  Object.entries(hardFilters || {}).forEach(([key, value]) => {
+    if (key === 'metadata_filters' || value === undefined || value === null || value === '') return;
+    payload[key] = value;
+  });
   return payload;
 }
 

@@ -193,6 +193,37 @@ from the agent-facing MCP `report_learning` tool, which **queues** the write
 to confirm a queued write landed is configurable per deployment (off by
 default).
 
+### List entries by what they carry
+
+`list_entries` pages newest-first and takes the same non-semantic filters
+`search` has, applied **server-side** before pagination, so a filter-only
+browse never depends on which page you loaded:
+
+```python
+kb.list_entries(metadata_filters={"created_by": "alice"})      # exact match
+kb.list_entries(metadata_filters={"tags": ["billing"]})        # list CONTAINS
+kb.list_entries(source="mcp_tools", created_after="2026-10-01", limit=200)
+```
+
+Which keys and values exist is not a guess: `metadata_facets()` reports every
+`metadata` key the bank's entries actually carry, with entry counts, distinct
+counts and the most common values, plus the `source` column facet.
+
+```python
+facets = kb.metadata_facets(max_values=25)
+for f in facets["facets"]:
+    print(f["key"], f["entry_count"], f["distinct_count"], f["values"][:3])
+# created_by 812 4 [{'value': 'alice', 'type': 'string', 'count': 500, 'in_list': False}, …]
+facets["source"]["values"]            # [{'value': 'mcp_tools', 'count': 3916, …}, …]
+```
+
+Each value carries its JSON `type` (`"string"`, `"number"`, `"boolean"`) so you
+rebuild the typed filter (`{"is_gotcha": True}`, not `"true"`), and `in_list`
+when the value was an element of a list (`{"tags": ["billing"]}`). Keys whose
+values are objects are listed without values; they cannot be filtered on.
+The same `source=` filter is accepted by `search_expanded` and, as the
+`"source"` key, by a dict `search` request.
+
 ### Update an entry in place
 
 `update_entry` changes an existing entry and re-embeds what changed, so there
@@ -698,9 +729,11 @@ and against a self-hosted platform (`--base-url https://<platform>` with the
 service token as the key). The self-hosted platform image also serves the same
 UI itself at `/ui`.
 
-Tabs: **Entries** (weighted multi-dimension search, exact-match filters for
-text-only dimensions such as a business bank's `kind`, add / edit / delete,
-"Promote to playbook"), **Map** (cluster the bank's embeddings with
+Tabs: **Entries** (weighted multi-dimension search, a **Filters** panel built
+from `metadata_facets()`: the metadata keys the entries really carry, their
+top values, the `source` and a created-date range, applied to browsing, plain
+search and LLM-powered search; exact-match selects for text-only dimensions
+such as a business bank's `kind`; add / edit / delete; "Promote to playbook"), **Map** (cluster the bank's embeddings with
 `kb.cluster()` and see every entry placed by similarity, with playbooks drawn
 as step chains linked to the entries they cite), **Playbooks**, **Schema**,
 **Quality** (assertions, retrieval-eval runs), **History** (recent queries,
@@ -850,6 +883,20 @@ edit the harness, they file a card.
 ---
 
 ## Changelog
+
+### 0.6.0
+
+- **Filter entries by what they actually carry.** `kb.list_entries(...)` (sync
+  and async) takes `metadata_filters=` (JSONB containment; a list value means
+  "contains"), `source=` and the `created_/updated_/event_` time bounds, applied
+  server-side before pagination. New `kb.metadata_facets(max_values=,
+  max_keys=)` returns every metadata key the bank's entries carry with entry
+  counts, distinct counts and the most common typed values, plus the `source`
+  facet (types `MetadataFacets`, `MetadataFacet`, `MetadataFacetValue`,
+  `SourceFacet`). `search_expanded(..., source=)` and a `"source"` key in a
+  dict `search` request filter on the source column. The Explorer's Entries
+  tab gains a Filters panel built from the facets. Needs a hosted API or a
+  kb-platform image that serves `GET /banks/{kb}/metadata-facets`.
 
 ### 0.5.6
 

@@ -103,6 +103,7 @@ export function createApi(kbId, base, opts = {}) {
     updateEntry: (id, updates) => req('PATCH', `/entries/${encodeURIComponent(id)}`, { body: updates }),
     deleteEntry: (id) => req('DELETE', `/entries/${encodeURIComponent(id)}`),
     // search + cluster
+    metadataFacets: (params) => req('GET', '/metadata-facets', { params }),
     search: (payload) => req('POST', '/search', { body: payload }),
     searchExpanded: (payload) => req('POST', '/search/expanded', { body: payload }),
     cluster: (payload) => req('POST', '/cluster', { body: payload }),

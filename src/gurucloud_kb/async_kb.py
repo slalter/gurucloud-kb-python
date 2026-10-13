@@ -9,7 +9,7 @@ from gurucloud_kb._async_http import AsyncHTTPClient
 from gurucloud_kb import _playbooks as _pb
 from gurucloud_kb._entries import build_entry_update
 from gurucloud_kb._playbooks import qs as _qs
-from gurucloud_kb._search import build_expanded_search, build_string_search, normalize_search_request
+from gurucloud_kb._search import build_expanded_search, build_list_params, build_string_search, normalize_search_request
 from gurucloud_kb.types import (
     ExpandedSearchResult,
     ExpansionSpeed,
@@ -29,6 +29,7 @@ from gurucloud_kb.types import (
     EntryEventLogList,
     EntryInput,
     EntryResult,
+    MetadataFacets,
     KBInfo,
     MCPServerDefinition,
     SchemaWarning,
@@ -187,11 +188,70 @@ class AsyncKnowledgeBank:
         *,
         limit: int = 50,
         offset: int = 0,
+        metadata_filters: Mapping[str, Any] | None = None,
+        source: str | None = None,
+        created_after: str | datetime | None = None,
+        created_before: str | datetime | None = None,
+        updated_after: str | datetime | None = None,
+        updated_before: str | datetime | None = None,
+        event_after: str | datetime | None = None,
+        event_before: str | datetime | None = None,
     ) -> list[EntryResult]:
-        """List entries with pagination."""
+        """List entries, newest first, optionally narrowed by hard filters.
+
+        The filters are the same non-semantic levers ``search`` has, applied
+        SERVER-side before pagination, so a filter-only browse (no query)
+        never depends on which page you happened to load::
+
+            kb.list_entries(metadata_filters={"created_by": "alice"})
+            kb.list_entries(metadata_filters={"tags": ["billing"]})   # list CONTAINS
+            kb.list_entries(source="mcp_tools", created_after="2026-10-01")
+
+        Use :meth:`metadata_facets` to see which keys and values the bank's
+        entries actually carry before choosing a filter.
+
+        Args:
+            limit, offset: Page (max 200 per page).
+            metadata_filters: JSONB containment on entry metadata: a scalar
+                matches exactly, a list value matches entries whose list
+                contains it.
+            source: Exact match on the entry's ``source``.
+            created_after, created_before, updated_after, updated_before,
+            event_after, event_before: ISO-8601 or ``datetime`` bounds (UTC).
+        """
         return await self._http.get(
             self._path("/entries"),
-            params={"limit": limit, "offset": offset},
+            params=build_list_params(
+                limit=limit,
+                offset=offset,
+                metadata_filters=metadata_filters,
+                source=source,
+                created_after=created_after,
+                created_before=created_before,
+                updated_after=updated_after,
+                updated_before=updated_before,
+                event_after=event_after,
+                event_before=event_before,
+            ),
+        )
+
+    async def metadata_facets(self, *, max_values: int = 25, max_keys: int = 200) -> MetadataFacets:
+        """What the bank's entries ACTUALLY carry in ``metadata``, discovered
+        from the data: every key with its entry count, distinct-value count
+        and most common values (``{value, type, count, in_list}``), plus the
+        ``source`` column facet. ``type`` is the JSON type to rebuild the value
+        with for a filter (a ``"boolean"`` ``"true"`` is ``True``, not the
+        string); ``in_list`` means the value was an element of a list, so the
+        filter is ``{key: [value]}``.
+
+        Args:
+            max_values: Values returned per key (default 25, max 100).
+            max_keys: Keys returned (default 200, max 500); ``truncated_keys``
+                says when the bank has more.
+        """
+        return await self._http.get(
+            self._path("/metadata-facets"),
+            params={"max_values": max_values, "max_keys": max_keys},
         )
 
     async def add_entry(self, entry: EntryInput) -> dict[str, Any]:
@@ -364,6 +424,7 @@ class AsyncKnowledgeBank:
         k: int = 10,
         threshold: float = 0.25,
         metadata_filters: dict[str, Any] | None = None,
+        source: str | None = None,
         speed: ExpansionSpeed | None = None,
         content_weight: float | None = None,
         lexical: bool | None = None,
@@ -435,6 +496,7 @@ class AsyncKnowledgeBank:
         given: dict[str, Any] = dict(options)
         given.update(
             metadata_filters=metadata_filters,
+            source=source,
             speed=speed,
             reasoning_effort=reasoning_effort,
             content_weight=content_weight,

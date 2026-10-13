@@ -198,6 +198,50 @@ class EntryResult(TypedDict, total=False):
 SearchResult = EntryResult
 
 
+# ── Metadata facets ─────────────────────────────────────────────
+
+
+FacetValueType = Literal["string", "number", "boolean"]
+
+
+class MetadataFacetValue(TypedDict, total=False):
+    """One observed value of a metadata key (``kb.metadata_facets()``)."""
+
+    value: str  # the value as text
+    type: FacetValueType  # rebuild the typed JSON value with this for a filter
+    count: int  # entries carrying this value
+    in_list: bool  # the value was an element of a list; filter with {key: [value]}
+
+
+class MetadataFacet(TypedDict, total=False):
+    """One ``metadata`` key as the bank's entries carry it."""
+
+    key: str
+    entry_count: int  # entries that carry the key at all
+    distinct_count: int  # distinct scalar values (list elements counted individually)
+    has_list_values: bool
+    has_object_values: bool  # object values are listed as keys only (not filterable)
+    values: list[MetadataFacetValue]  # most common first, capped by max_values
+
+
+class SourceFacet(TypedDict, total=False):
+    """The ``source`` column as a facet (entries with no source are not counted)."""
+
+    entry_count: int
+    distinct_count: int
+    values: list[MetadataFacetValue]
+
+
+class MetadataFacets(TypedDict, total=False):
+    """``kb.metadata_facets()`` response."""
+
+    total_entries: int
+    max_values: int
+    facets: list[MetadataFacet]
+    source: SourceFacet
+    truncated_keys: bool  # the bank has more keys than max_keys
+
+
 # ── Search ──────────────────────────────────────────────────────
 
 
