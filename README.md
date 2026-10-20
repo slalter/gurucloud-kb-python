@@ -451,6 +451,114 @@ platform's own key.
 
 ---
 
+## Connect entries (knowledge graph)
+
+Entries can be connected with typed, directed relations. A connection is
+first-class data in the bank: it has foreign keys to both entries, a source
+(who wrote it), a note and evidence, and every write or delete is audited.
+Search can fold connected results, the Explorer shows connections on each
+entry, and deleting an entry bridges the chains through it.
+
+```python
+# detail -> hub, newer -> older
+kb.connect(detail_id, hub_id, "part_of", note="the port and env recipe")
+kb.connect(new_id, old_id, "supersedes")
+
+# what an entry is connected to, both directions
+conns = kb.connections(hub_id)
+for e in conns["incoming"]:
+    print(e["edge_type"], e["other"]["id"][:8], e["other"]["useful_for"])
+
+# a neighbourhood for a graph view (1-3 hops)
+g = kb.graph(hub_id, depth=2)
+
+# remove one (audited)
+kb.disconnect(edge_id, reason="wrong direction")
+```
+
+Relations: `cites`, `see_also`, `part_of`, `supersedes`, `split_from`,
+`derived_from`, `corrects`, `clarifies`, `conflicts_with`, `precedes`,
+`requires`, `produces`, `owned_by`. Write one only when you are sure of it;
+similarity alone is never a connection (the Explorer's Similar tab proposes
+cross-references, and an approved one becomes a `see_also` pair).
+
+### Declare the relations a bank allows
+
+Every bank speaks the built-in relations above. A bank can declare its own
+on top of them, or replace them outright. Writes, retypes, the edge filter on
+`list_connections` and the `connections` parameter the bank's MCP tools
+advertise all follow the bank's vocabulary; a relation the bank does not hold
+is refused with `unknown_edge_type` (HTTP 400), naming the allowed ones.
+
+```python
+kb.set_edge_relations([
+    {"name": "applies_at", "description": "from applies at the playbook step to"},
+    {"name": "step_of", "description": "from is a step of the procedure to",
+     "transitive": True,         # bridging a deleted entry keeps the type
+     "representative": "to"},    # the procedure stands for the group when search collapses
+])
+kb.connect(learning_id, step_entry_id, "applies_at", note="GAS-002")
+
+vocab = kb.edge_relations()      # built-ins first (origin "builtin"), then declared
+print([r["name"] for r in vocab["relations"]])
+
+# a closed vocabulary: only these, plus the two the service itself writes
+kb.set_edge_relations(
+    [{"name": "applies_at"}, {"name": "see_also"}, {"name": "cites"}],
+    replace_defaults=True,
+)
+```
+
+Names are slugs (lowercase letters, digits and underscores, 2 to 32
+characters). Declaring a built-in name re-describes it rather than adding a
+second one. With `replace_defaults=True` the list must include `see_also` and
+`cites`, because bridging, approved similar pairs and the citation backfill
+write them. Dropping a relation that stored connections still carry is
+refused with `edge_types_in_use` (HTTP 409); retype or delete those first.
+The declaration lives on the dimension schema (`edge_relations`,
+`edge_relations_replace_defaults`), so `client.create_kb(...)` and
+`kb.update(...)` accept it too. Requires `write` scope.
+
+### Backfill the connections a bank already implies
+
+Entries that cite another entry by id in their text (`kb:3f7a0db1`, `entry
+3f7a0db1`, a full UUID) and the typed metadata curation leaves behind
+(`split_from`, `replaces`, `recovered_from_entry_id` ...) are connections
+nobody wrote down as such. `backfill_connections` finds them:
+
+```python
+report = kb.backfill_connections()               # dry run: plan and count
+print(report["by_type"], report["unresolved"], report["ambiguous"])
+report = kb.backfill_connections(dry_run=False)  # write them (re-running is safe)
+```
+
+### Collapse connected results in search
+
+`search(..., collapse=True)` fetches a wider pool, folds entries connected to
+each other into one representative each and refills the freed slots with
+further topics, so the same `k` covers more distinct topics. Each
+representative carries `related` pointers to what was folded into it:
+
+```python
+for r in kb.search("run the service locally", k=8, collapse=True):
+    print(r["id"][:8], r["content"][:60])
+    for p in r.get("related", []):
+        print("   ", p["relation"], p["direction"], p["id"][:8], p["text"], p.get("note"))
+```
+
+The top two hits are never folded into anything, `supersedes` / `corrects`
+make the newer entry the representative and `part_of` / `split_from` make the
+hub or parent the representative. Each result also lists its direct
+connections that the search did not return as pointers of `kind`
+`"neighbor"` (at most `max_neighbors`, note-carrying edges first); every
+pointer carries the edge's `note`, the writer's sentence on how that entry
+pertains, so a reader can decide whether to hop. A dict tunes it:
+`collapse={"pool": 30, "guard_top_n": 2, "max_related": 6, "max_neighbors": 3,
+"pointer_text": "summary"}`. `pointer_text` is what a pointer says about the
+entry it points at: `summary` (default; the entry's `metadata.summary`, one
+sentence on what it says, written by the service when an entry is added or
+edited, useful_for until then), `useful_for`, `snippet` or `none`.
+
 ## Cluster entries
 
 Group a KB's entries by any field. Each field is clustered **independently** and
@@ -583,6 +691,63 @@ field warnings), `label_usage` (LLM token accounting when labeling ran),
 distinct `values`.
 
 ---
+
+## Similar pairs — find duplicates and conflicts (beta)
+
+`similar_pairs()` returns the entries that sit closest to each other in one
+embedding dimension, best first, with both entries' text: every entry in
+scope probes its nearest neighbours in the index, so a whole bank is checked
+in one call (16 s for 7,800 entries; the newest 2,000 in about 3 s).
+
+```python
+out = kb.similar_pairs(threshold=0.9, limit=50)            # newest 2,000 entries, 3 neighbours each
+for p in out["pairs"]:
+    print(round(p["similarity"], 3), p["a"]["id"], "|", p["b"]["id"])
+out["stats"]   # {"entries_scanned": 2000, "pairs_above_threshold": 12, "truncated": False, "duration_ms": 3300, ...}
+
+kb.similar_pairs(max_entries=20000)                           # the whole bank
+kb.similar_pairs(scope={"metadata_filters": {"kind": "rule"}}) # only rules probe; neighbours may be any entry
+```
+
+`judge_pairs()` asks a model what each pair IS: `duplicate` (the same facts
+twice), `conflicting` (they disagree on what is true or what to do),
+`related` (same topic, both needed) or `distinct`, with a confidence, a
+one-line reason and a suggested action (`merge`, `keep_both`,
+`review_conflict`, `delete_one`). One model call per request, at most 25
+pairs, paid by your stored credential when you have one; every call is
+audited on the platform. Model failures come back in `status`, never raised.
+
+```python
+verdicts = kb.judge_pairs([(p["a"]["id"], p["b"]["id"]) for p in out["pairs"][:20]], speed="thorough")
+for j in verdicts["judgements"]:
+    print(j["verdict"], round(j["confidence"], 2), j["suggested_action"], "-", j["reason"])
+```
+
+With `propose=True` (the default) every judgement also carries a concrete
+**proposal** the judge wrote under the bank's rules (one durable fact per
+entry, corrections-only lossless merges, companions stay separate with a
+pointer, pure subsets go, conflicts are reviewed): `kind` is `merge`,
+`keep_separate`, `trim_overlap`, `cross_reference`, `delete_one` or
+`review_conflict`, with a rationale and, per entry it would change, the
+minimal `edits` the judge wrote (`{"find": "<exact passage>", "replace":
+"<new text>"}`; an empty `find` appends a paragraph) plus the resulting
+`content` the platform computed from them (`edits_apply_cleanly` is False
+when an edit no longer matches the entry). Pairs are judged concurrently, one
+model call each; `judge_models` on the scan result names the default judge
+model per speed. Once a person approves a proposal, `apply_pair_proposal()` executes
+it through the ordinary update (re-embed) and delete paths, skips protected
+entries, snapshots each entry first and audits the application:
+
+```python
+j = verdicts["judgements"][0]
+if j["proposal"]["kind"] in ("merge", "delete_one"):
+    out = kb.apply_pair_proposal(verdicts["judgement_id"], j["a_id"], j["b_id"], j["proposal"], reason="duplicate confirmed")
+    out["status"], [c["status"] for c in out["changes"]]     # "applied", ["applied", "applied"]
+```
+
+The Explorer's **Similar** tab shows the same pairs side by side, judges them
+on demand and shows each proposal (current vs proposed text) with
+**Approve & apply** and **Dismiss**.
 
 ## Retrieval assertions (search-quality regression tests)
 
@@ -883,6 +1048,84 @@ edit the harness, they file a card.
 ---
 
 ## Changelog
+
+### 0.10.0
+
+- **Per-bank edge relations.** `kb.edge_relations()` returns the bank's
+  effective relation vocabulary and `kb.set_edge_relations([...],
+  replace_defaults=False)` declares it (async mirrors on `AsyncKnowledgeBank`).
+  New types `EdgeRelationConfig`, `EdgeRelation`, `EdgeRelationVocabulary`,
+  `BuiltinEdgeType` and `BUILTIN_EDGE_TYPES`. `EdgeType` widens from a
+  `Literal` to `str`, so a declared relation type-checks in `kb.connect`.
+  The Explorer's connect form lists the bank's own relations. Needs a
+  platform that serves `/edge-relations` (hosted GuruCloud, or kb-platform
+  1.8.0 and later); older platforms answer 404 and the Explorer falls back to
+  the built-ins.
+
+### 0.9.0
+
+- **Explorer Graph tab.** Search the bank the way an agent does (top-K,
+  collapse on/off, neighbors per result) and see the answer twice: as the
+  agent reads it (ranked results, `related` pointers with relation, kind,
+  text and note, the collapse summary, raw JSON on demand) and as a graph
+  (retrieved entries, the entries the pointers name, the edges between them,
+  optionally every other connection of the results, one-hop expansion from
+  any node). With no query the tab draws the whole bank as constellations:
+  every `entry_edges` row, laid out component by component with no
+  overlapping nodes. UI bundle only; no SDK API change.
+
+### 0.8.0
+
+- **Entry connections (knowledge graph).** `kb.connect(from, to, relation)`,
+  `kb.add_connections([...])`, `kb.connections(entry_id)`, `kb.disconnect(edge_id)`,
+  `kb.list_connections(...)`, `kb.connection_stats()`, `kb.graph(root, depth=...)`
+  and `kb.backfill_connections(dry_run=...)` over the new per-bank
+  `entry_edges` table (typed, directed, foreign keys to both entries, audited).
+  Deleting an entry bridges A -> B -> C to A -> C.
+- **`search(..., collapse=True)`** folds connected results into one
+  representative each with `related` pointers and refills the freed slots.
+  Every pointer carries the edge's `note` (how that entry pertains) and a
+  `kind`: `folded` (was in the pool) or `neighbor` (one hop off the results,
+  not fetched; `max_neighbors` per result, default 3). The hosted
+  `query_knowledge_bank` tool collapses by default.
+- **Explorer:** connections on the entry detail (add, remove, open the other
+  entry) and a graph view of an entry's neighbourhood.
+
+### 0.7.2
+
+- **Explorer: collapsible Filters panel.** The Entries tab's Filters card starts
+  collapsed (it is tall), its header line says how many metadata keys the bank
+  has and how many filters are active, and a click expands it; the choice is
+  remembered per bank. Active filters stay visible as removable chips above the
+  list either way.
+
+### 0.7.1
+
+- **Explorer: multi-select and bulk actions.** Every entry card has a checkbox
+  and the Entries tab a bulk bar: *Select all shown*, *Set metadata…* (one key
+  and a typed value merged into every selected entry through the per-entry
+  update) and *Delete…* (confirmed, then one audited delete per entry).
+- **Explorer: key finder.** The Filters panel gets a *Find a key* input (type
+  part of a metadata key to get its select) and a *Who acted on it* row listing
+  the bank's `*_by` / reviewer / owner keys, so a bank with hundreds of keys
+  still filters by the person who approved, decided or filed an entry.
+- No SDK API change; the bundle is served by `gurucloud-kb ui` and by the
+  platform image, whose `/ui` modules now revalidate on every load.
+
+### 0.7.0
+
+- **Similar pairs (beta).** Judgements carry a concrete `proposal` (kind, rationale,
+  minimal find/replace `edits` per changed entry with the resulting `content`) written under the bank's rules, judged one pair per concurrent model call; `kb.apply_pair_proposal(judgement_id, a_id, b_id, proposal, reason=)` executes an approved one (audited, protected entries skipped, snapshots returned).
+- **Similar pairs (beta).** `kb.similar_pairs(field=, threshold=, neighbors=,
+  limit=, max_entries=, scope=)` (sync and async) returns the bank's most
+  similar entry pairs from the embeddings with both entries' text and scan
+  stats; `kb.judge_pairs(pairs, speed=, model=, reasoning_effort=,
+  timeout_seconds=, context=)` has a model classify each pair as duplicate /
+  conflicting / related / distinct with a reason and a suggested action
+  (audited on the platform; failures reported in `status`). New types
+  `SimilarPairsResult`, `SimilarPair`, `PairEntry`, `PairJudgement`,
+  `JudgePairsResult`. The Explorer gains a **Similar** tab. Needs a hosted API
+  or kb-platform image that serves `POST /banks/{kb}/similar-pairs`.
 
 ### 0.6.0
 

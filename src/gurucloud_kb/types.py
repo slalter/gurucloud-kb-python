@@ -119,6 +119,13 @@ class DimensionSchema(TypedDict, total=False):
     ``source``, ``metadata``, ``combined_score``, ``created_at``,
     ``updated_at``) plus the KB's own dimension names. Only affects the MCP
     response shape; the REST API and stored data are unchanged."""
+    edge_relations: list[EdgeRelationConfig]
+    """The edge relations this bank declares beyond the built-ins (see
+    ``kb.set_edge_relations``)."""
+    edge_relations_replace_defaults: bool
+    """When ``True`` the declared ``edge_relations`` are the bank's whole
+    vocabulary (the system relations ``see_also`` and ``cites`` must then be
+    declared)."""
 
 
 class SchemaWarning(TypedDict, total=False):
@@ -192,6 +199,23 @@ class EntryResult(TypedDict, total=False):
     created_at: str
     updated_at: str
     event_at: str  # caller-supplied event time (ISO-8601), null when unset
+    # Connected entries folded into this result by ``search(collapse=...)``;
+    # absent / empty on a plain search or an entry fetch.
+    related: list["RelatedPointer"]
+    related_truncated: int  # pointers beyond ``max_related`` that were not listed
+
+
+class RelatedPointer(TypedDict, total=False):
+    """A connected entry folded into a search result's representative."""
+
+    id: str
+    relation: str  # edge type on the last hop from the representative (or "connected")
+    direction: str  # "outgoing" (representative/via -> this entry) or "incoming"
+    via: str | None  # the previous node when the entry is not a direct neighbour
+    text: str  # what the pointer says about the entry (useful_for by default; see collapse pointer_text)
+    score: float
+    kind: str  # "folded" (was in the pool, folded into this result) or "neighbor" (one hop off the results)
+    note: str | None  # the edge's note: how the pointed-at entry pertains to this one
 
 
 # Search results have the same shape as entries (with scores populated)
@@ -423,6 +447,130 @@ class ClusteringResult(TypedDict, total=False):
 
 
 # ── MCP Server Definition ──────────────────────────────────────
+
+
+# ── Similar pairs (beta) ────────────────────────────────────────
+
+
+PairVerdict = Literal["duplicate", "conflicting", "related", "distinct"]
+PairSuggestedAction = Literal["merge", "keep_both", "review_conflict", "delete_one"]
+JudgeStatus = Literal["judged", "unconfigured", "timeout", "error"]
+
+
+class PairEntry(TypedDict, total=False):
+    """One side of a similar pair."""
+
+    id: str
+    content: str
+    useful_for: str
+    source: str | None
+    metadata: dict[str, Any]
+    created_at: str | None
+
+
+ProposalKind = Literal["merge", "keep_separate", "trim_overlap", "cross_reference", "delete_one", "review_conflict"]
+ChangeAction = Literal["update", "delete", "none"]
+
+
+class ProposedEdit(TypedDict, total=False):
+    """One minimal edit: replace the exact ``find`` passage with ``replace``;
+    an empty ``find`` appends ``replace`` as a new paragraph."""
+
+    find: str
+    replace: str
+
+
+class ProposedChange(TypedDict, total=False):
+    """One entry a proposal would touch."""
+
+    entry_id: str
+    action: ChangeAction
+    edits: list[ProposedEdit]  # the minimal edits the judge wrote (update)
+    edits_apply_cleanly: bool  # False when an edit no longer matches the entry; then `content` is absent
+    edit_errors: list[str]
+    content: str | None  # the resulting full content, computed by the platform from the edits (update)
+    useful_for: str | None  # full replacement useful_for (update), when it changes
+
+
+class PairProposal(TypedDict, total=False):
+    """The concrete change the judge proposes for a pair; a person approves it."""
+
+    kind: ProposalKind
+    rationale: str
+    changes: list[ProposedChange]
+
+
+class PairJudgement(TypedDict, total=False):
+    """What a model made of one pair (``kb.judge_pairs``)."""
+
+    a_id: str
+    b_id: str
+    verdict: PairVerdict
+    confidence: float  # 0-1
+    reason: str
+    suggested_action: PairSuggestedAction
+    proposal: PairProposal | None  # present when judged with propose=True
+
+
+ChangeStatus = Literal["applied", "skipped", "failed"]
+ApplyStatus = Literal["applied", "partial", "failed", "nothing_to_apply"]
+
+
+class AppliedChange(TypedDict, total=False):
+    entry_id: str
+    action: ChangeAction
+    status: ChangeStatus
+    error: str | None
+    previous: dict[str, Any] | None  # the entry before the change, for recovery
+
+
+class ApplyProposalResult(TypedDict, total=False):
+    """``kb.apply_pair_proposal(...)`` response."""
+
+    status: ApplyStatus
+    kind: ProposalKind
+    changes: list[AppliedChange]
+    application_id: str | None  # audit row id on the platform
+
+
+class SimilarPair(TypedDict, total=False):
+    a: PairEntry
+    b: PairEntry
+    similarity: float  # cosine, 0-1
+    judgement: PairJudgement | None
+
+
+class SimilarPairsStats(TypedDict, total=False):
+    entries_scanned: int
+    neighbors: int
+    pairs_above_threshold: int
+    truncated: bool  # more pairs cleared the threshold than `limit` returned
+    duration_ms: float
+
+
+class SimilarPairsResult(TypedDict, total=False):
+    """``kb.similar_pairs(...)`` response."""
+
+    kb_id: str
+    field: str
+    threshold: float
+    pairs: list[SimilarPair]  # best first
+    stats: SimilarPairsStats
+    judge_models: dict[str, str]  # the platform's default judge model per speed ("fast" / "thorough")
+
+
+class JudgePairsResult(TypedDict, total=False):
+    """``kb.judge_pairs(...)`` response."""
+
+    status: JudgeStatus
+    judgements: list[PairJudgement]
+    model: str | None
+    credential_source: str | None
+    duration_ms: float
+    input_tokens: int
+    output_tokens: int
+    error: str | None
+    judgement_id: str | None  # audit row id on the platform
 
 
 class MCPServerAuth(TypedDict, total=False):
@@ -967,3 +1115,167 @@ class ExpandedSearchResult(TypedDict, total=False):
     results: list[SearchResult]
     expansion: ExpansionInfo
     search_request: dict[str, Any]  # the effective multi-dimensional request that ran
+
+
+# ── Entry connections (knowledge graph) ─────────────────────────
+
+
+BuiltinEdgeType = Literal[
+    "cites", "see_also", "part_of", "supersedes", "split_from", "derived_from",
+    "corrects", "clarifies", "conflicts_with", "precedes", "requires", "produces", "owned_by",
+]
+"""The relations every bank speaks."""
+
+BUILTIN_EDGE_TYPES: tuple[str, ...] = (
+    "cites", "see_also", "part_of", "supersedes", "split_from", "derived_from",
+    "corrects", "clarifies", "conflicts_with", "precedes", "requires", "produces", "owned_by",
+)
+
+EdgeType = str
+"""A relation between two entries (``kb.connect(...)``): one of
+``BUILTIN_EDGE_TYPES`` or a relation the bank declared with
+``kb.set_edge_relations``; ``kb.edge_relations()`` lists the bank's effective
+vocabulary. A relation the bank does not hold is refused with
+``unknown_edge_type`` (HTTP 400) naming the allowed ones."""
+
+
+class EdgeRelationConfig(TypedDict, total=False):
+    """One relation a bank declares (``kb.set_edge_relations([...])``)."""
+
+    name: str  # slug: lowercase letters, digits, underscores, 2-32 chars (required)
+    description: str  # how it reads from the from-side; shown to agents in tool descriptions
+    transitive: bool  # A -r-> B -r-> C implies A -r-> C (bridging a deleted entry keeps the type)
+    symmetric: bool  # reads the same from both ends
+    representative: Literal["from", "to"] | None  # which end stands for a connected group when search collapses
+
+
+class EdgeRelation(EdgeRelationConfig, total=False):
+    """One relation of a bank's effective vocabulary (``kb.edge_relations()``)."""
+
+    origin: Literal["builtin", "declared"]
+    system: bool  # written by the service itself (bridging, backfill, approved similar pairs)
+
+
+class EdgeRelationVocabulary(TypedDict, total=False):
+    """``kb.edge_relations()``: everything the bank's edges may be typed as."""
+
+    relations: list[EdgeRelation]  # effective vocabulary, built-ins first then declared
+    declared: list[EdgeRelationConfig]  # exactly what the bank declared
+    replace_defaults: bool
+    system_relations: list[str]  # relations a replacing vocabulary must keep
+
+EdgeSource = Literal["author", "judge", "backfill_citation", "backfill_metadata", "bridged", "import"]
+"""Who or what wrote a connection."""
+
+
+class EdgeInput(TypedDict, total=False):
+    """One connection to write (``kb.add_connections([...])``)."""
+
+    from_entry_id: str  # full id or unique prefix
+    to_entry_id: str
+    edge_type: EdgeType
+    note: str
+    evidence: dict[str, Any]
+
+
+class EntryEdge(TypedDict, total=False):
+    """A stored connection."""
+
+    id: str
+    from_entry_id: str
+    to_entry_id: str
+    edge_type: EdgeType
+    source: EdgeSource
+    note: str | None
+    evidence: dict[str, Any]
+    created_by: str | None
+    created_at: str
+
+
+class EdgeEnd(TypedDict, total=False):
+    """The other entry of a connection, enough to decide whether to fetch it."""
+
+    id: str
+    useful_for: str
+    snippet: str
+
+
+class ConnectedEdge(EntryEdge, total=False):
+    direction: Literal["outgoing", "incoming"]
+    other: EdgeEnd
+
+
+class EntryConnections(TypedDict, total=False):
+    """``kb.connections(entry_id)``: both directions."""
+
+    entry_id: str
+    outgoing: list[ConnectedEdge]
+    incoming: list[ConnectedEdge]
+
+
+class EdgeError(TypedDict, total=False):
+    from_entry_id: str
+    to_entry_id: str
+    edge_type: str
+    error: str
+
+
+class AddEdgesResult(TypedDict, total=False):
+    """``kb.connect`` / ``kb.add_connections``: what was written."""
+
+    created: list[EntryEdge]
+    existing: list[EntryEdge]  # already there, left untouched
+    errors: list[EdgeError]  # an end the bank does not hold
+
+
+class DeleteEdgeResult(TypedDict, total=False):
+    deleted: bool
+    edge: EntryEdge | None
+
+
+class ConnectionList(TypedDict, total=False):
+    edges: list[EntryEdge]
+    limit: int
+    offset: int
+
+
+class EdgeStats(TypedDict, total=False):
+    total: int
+    by_type: dict[str, int]
+    by_source: dict[str, int]
+    entries_with_edges: int
+
+
+class GraphNode(TypedDict, total=False):
+    id: str
+    useful_for: str
+    snippet: str
+    depth: int  # hops from the root
+
+
+class GraphNeighborhood(TypedDict, total=False):
+    """``kb.graph(root, depth=...)``: nodes and edges around one entry."""
+
+    root: str
+    depth: int
+    nodes: list[GraphNode]
+    edges: list[EntryEdge]
+    truncated: bool  # the node cap cut the walk short
+
+
+class ConnectionBackfillReport(TypedDict, total=False):
+    """``kb.backfill_connections(...)``: what the bank's own text and metadata implied."""
+
+    dry_run: bool
+    entries_scanned: int
+    citation_candidates: int
+    metadata_candidates: int
+    created: int
+    existing: int
+    unresolved: int  # a cited id no entry carries (deleted long ago)
+    ambiguous: int  # an 8-char prefix shared by several entries
+    self_references: int
+    errors: int
+    by_type: dict[str, int]
+    samples: list[dict[str, Any]]
+    duration_ms: float

@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal, Mapping, Optional
+from typing import Any, Literal, Mapping, Optional, Sequence
 
 from gurucloud_kb._async_http import AsyncHTTPClient
 from gurucloud_kb import _playbooks as _pb
 from gurucloud_kb._entries import build_entry_update
 from gurucloud_kb._playbooks import qs as _qs
-from gurucloud_kb._search import build_expanded_search, build_list_params, build_string_search, normalize_search_request
+from gurucloud_kb._search import (
+    apply_collapse,
+    build_expanded_search,
+    build_list_params,
+    build_string_search,
+    normalize_pair_scope,
+    normalize_search_request,
+    pair_refs,
+)
 from gurucloud_kb.types import (
     ExpandedSearchResult,
     ExpansionSpeed,
@@ -29,7 +37,22 @@ from gurucloud_kb.types import (
     EntryEventLogList,
     EntryInput,
     EntryResult,
+    AddEdgesResult,
+    ApplyProposalResult,
+    ConnectionBackfillReport,
+    ConnectionList,
+    DeleteEdgeResult,
+    EdgeInput,
+    EdgeSource,
+    EdgeStats,
+    EdgeRelationConfig,
+    EdgeRelationVocabulary,
+    EdgeType,
+    EntryConnections,
+    GraphNeighborhood,
+    JudgePairsResult,
     MetadataFacets,
+    SimilarPairsResult,
     KBInfo,
     MCPServerDefinition,
     SchemaWarning,
@@ -355,6 +378,7 @@ class AsyncKnowledgeBank:
         updated_before: str | datetime | None = None,
         event_after: str | datetime | None = None,
         event_before: str | datetime | None = None,
+        collapse: bool | Mapping[str, Any] | None = None,
     ) -> list[SearchResult]:
         """Semantic search across the KB.
 
@@ -396,6 +420,16 @@ class AsyncKnowledgeBank:
             event_after, event_before:
                 Like the above, but filter on the caller-supplied ``event_at``
                 (when the event/observation occurred) instead of ingest time.
+            collapse: Fold results that are connected to each other (see
+                :meth:`connect`) into one representative each, with
+                ``related`` pointers ``{id, relation, direction, via,
+                useful_for, score}`` to the folded entries, and refill the
+                freed slots with further topics: same ``k``, more distinct
+                topics, every folded id one :meth:`get_entry` away. ``True``
+                takes the defaults; a dict sets ``pool`` (candidates fetched,
+                default 20), ``guard_top_n`` (top hits never folded, 2) and
+                ``max_related`` (pointers per result, 6). Applies to both
+                string and dict queries.
 
         Returns:
             List of matching entries with per-dimension and combined scores.
@@ -411,9 +445,10 @@ class AsyncKnowledgeBank:
                 updated_before=updated_before,
                 event_after=event_after,
                 event_before=event_before,
+                collapse=collapse,
             )
         else:
-            request = normalize_search_request(query)
+            request = apply_collapse(normalize_search_request(query), collapse)
 
         return await self._http.post(self._path("/search"), json=request)
 
@@ -607,6 +642,246 @@ class AsyncKnowledgeBank:
         if search is not None:
             body["search"] = normalize_search_request(search)
         return await self._http.post(self._path("/cluster"), json=body)
+
+    # ── similar pairs (beta) ─────────────────────────────────────
+
+    # ------------------------------------------------------------------
+    # Entry connections (knowledge graph)
+    # ------------------------------------------------------------------
+
+    async def connect(
+        self,
+        from_entry_id: str,
+        to_entry_id: str,
+        relation: EdgeType,
+        *,
+        note: str | None = None,
+        evidence: Mapping[str, Any] | None = None,
+        source: EdgeSource = "author",
+        created_by: str | None = None,
+    ) -> AddEdgesResult:
+        """Connect two entries with a typed, directed relation.
+
+        Connections are first-class data: ``search(collapse=True)`` folds
+        connected results into one representative with pointers, the
+        Explorer shows them on the entry, and deleting an entry bridges the
+        chains through it (A -> B -> C with B removed becomes A -> C). Write
+        one only when you are sure of the relation; similarity alone is not
+        a connection::
+
+            kb.connect(detail_id, hub_id, "part_of", note="the runbook step")
+            kb.connect(new_id, old_id, "supersedes")
+
+        Returns the stored edge under ``created`` (or ``existing`` when the
+        same from/to/relation was already there); an end the bank does not
+        hold is an ``errors`` row, never an exception.
+        """
+        edge: dict[str, Any] = {"from_entry_id": from_entry_id, "to_entry_id": to_entry_id, "edge_type": relation}
+        if note:
+            edge["note"] = note
+        if evidence:
+            edge["evidence"] = dict(evidence)
+        return await self.add_connections([edge], source=source, created_by=created_by)  # type: ignore[arg-type]
+
+    async def add_connections(
+        self, edges: Sequence[EdgeInput], *, source: EdgeSource = "author", created_by: str | None = None,
+    ) -> AddEdgesResult:
+        """Write several connections in one call (up to 200); see :meth:`connect`."""
+        if not edges:
+            raise ValueError("edges must not be empty")
+        body: dict[str, Any] = {"edges": [dict(e) for e in edges], "source": source}
+        if created_by:
+            body["created_by"] = created_by
+        return await self._http.post(self._path("/edges"), json=body)
+
+    async def connections(self, entry_id: str) -> EntryConnections:
+        """An entry's connections, both directions, each with the other
+        entry's ``useful_for`` and a content snippet."""
+        return await self._http.get(self._path(f"/entries/{entry_id}/edges"))
+
+    async def disconnect(self, edge_id: str, *, reason: str | None = None, actor: str | None = None) -> DeleteEdgeResult:
+        """Remove one connection by its id (audited with ``reason``)."""
+        params = {k: v for k, v in (("reason", reason), ("actor", actor)) if v}
+        return await self._http.delete(self._path(f"/edges/{edge_id}"), params=params or None)
+
+    async def list_connections(
+        self, *, edge_type: EdgeType | None = None, source: EdgeSource | None = None, limit: int = 100, offset: int = 0,
+    ) -> ConnectionList:
+        """The bank's connections, newest first, optionally by type or source."""
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if edge_type:
+            params["edge_type"] = edge_type
+        if source:
+            params["source"] = source
+        return await self._http.get(self._path("/edges"), params=params)
+
+    async def edge_relations(self) -> EdgeRelationVocabulary:
+        """The relations this bank's edges may carry (see ``KnowledgeBank.edge_relations``)."""
+        return await self._http.get(self._path("/edge-relations"))
+
+    async def set_edge_relations(
+        self, relations: Sequence[EdgeRelationConfig], *, replace_defaults: bool = False,
+    ) -> EdgeRelationVocabulary:
+        """Declare the bank's relations (see ``KnowledgeBank.set_edge_relations``). Requires ``write`` scope."""
+        body: dict[str, Any] = {"relations": [dict(r) for r in relations], "replace_defaults": bool(replace_defaults)}
+        return await self._http.put(self._path("/edge-relations"), json=body)
+
+    async def connection_stats(self) -> EdgeStats:
+        """Counts by type and by source, and how many entries are connected."""
+        return await self._http.get(self._path("/edge-stats"))
+
+    async def graph(self, root: str, *, depth: int = 1, limit: int = 150) -> GraphNeighborhood:
+        """The neighbourhood of ``root`` up to ``depth`` hops (1-3) in either
+        direction, at most ``limit`` nodes, for a graph view::
+
+            g = kb.graph(entry_id, depth=2)
+            for e in g["edges"]:
+                print(e["from_entry_id"][:8], e["edge_type"], e["to_entry_id"][:8])
+        """
+        return await self._http.get(self._path("/graph"), params={"root": root, "depth": depth, "limit": limit})
+
+    async def backfill_connections(
+        self, *, dry_run: bool = True, max_entries: int = 50000, actor: str | None = None,
+    ) -> ConnectionBackfillReport:
+        """Write the connections the bank's own entries already imply: in-text
+        citations of other entries by id (``cites``) and typed metadata links
+        such as ``split_from`` / ``replaces`` / ``recovered_from_entry_id``.
+        ``dry_run`` (the default) only plans and reports; re-running is safe,
+        existing connections are counted rather than duplicated.
+        """
+        params: dict[str, Any] = {"dry_run": "true" if dry_run else "false", "max_entries": max_entries}
+        if actor:
+            params["actor"] = actor
+        return await self._http.post(self._path("/edges/backfill"), params=params)
+
+    async def similar_pairs(
+        self,
+        *,
+        field: str | None = None,
+        threshold: float = 0.85,
+        neighbors: int = 3,
+        limit: int = 100,
+        max_entries: int = 2000,
+        scope: Mapping[str, Any] | None = None,
+    ) -> SimilarPairsResult:
+        """The bank's most similar entry pairs (beta): duplicate and conflict
+        candidates found from the embeddings, best first, with both entries.
+
+        Every entry in scope (the newest ``max_entries``, optionally narrowed
+        by the ``scope`` hard filters) probes its ``neighbors`` nearest
+        entries in ``field`` (default: the primary content dimension); pairs
+        at or above ``threshold`` cosine similarity are returned::
+
+            out = kb.similar_pairs(threshold=0.9, limit=50)
+            for p in out["pairs"]:
+                print(round(p["similarity"], 3), p["a"]["id"], p["b"]["id"])
+
+        A whole-bank scan of a large bank takes seconds (16 s for 7.8K
+        entries); ``out["stats"]`` reports what was scanned and whether more
+        pairs cleared the threshold than ``limit`` returned.
+
+        Args:
+            field: A SINGLE embedding dimension name.
+            threshold: Minimum cosine similarity (default 0.85).
+            neighbors: Nearest entries probed per entry (1-10, default 3).
+            limit: Pairs returned (1-500, default 100).
+            max_entries: Entries scanned, newest first (default 2000).
+            scope: Hard filters on the scanned entries, the same keys as
+                :meth:`list_entries` (``metadata_filters``, ``source``,
+                ``created_after`` ...).
+        """
+        body: dict[str, Any] = {"threshold": threshold, "neighbors": neighbors, "limit": limit, "max_entries": max_entries}
+        if field is not None:
+            body["field"] = field
+        if scope:
+            body["scope"] = normalize_pair_scope(scope)
+        return await self._http.post(self._path("/similar-pairs"), json=body)
+
+    async def judge_pairs(
+        self,
+        pairs: Sequence[tuple[str, str] | Mapping[str, str]],
+        *,
+        speed: ExpansionSpeed | None = None,
+        model: str | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
+        timeout_seconds: float | None = None,
+        context: str | None = None,
+        propose: bool = True,
+    ) -> JudgePairsResult:
+        """Ask a model what each pair IS (beta): ``duplicate`` (same facts
+        twice), ``conflicting`` (they disagree on what is true or what to
+        do), ``related`` (same topic, both needed) or ``distinct``, each with
+        a confidence, a one-line reason and a ``suggested_action`` (``merge``,
+        ``keep_both``, ``review_conflict``, ``delete_one``)::
+
+            out = kb.similar_pairs(threshold=0.9, limit=20)
+            verdicts = kb.judge_pairs([(p["a"]["id"], p["b"]["id"]) for p in out["pairs"]])
+            for j in verdicts["judgements"]:
+                print(j["verdict"], j["confidence"], j["reason"])
+
+        One model call per request (at most 25 pairs), paid by your stored
+        credential when you have one, otherwise by the platform. Model
+        failures are reported in ``status`` (``judged`` | ``unconfigured`` |
+        ``timeout`` | ``error``), never raised. Every call is audited on the
+        platform.
+
+        Args:
+            pairs: ``(a_id, b_id)`` tuples or ``{"a_id", "b_id"}`` dicts.
+            speed: ``"fast"`` or ``"thorough"`` (default: the platform's).
+            model, reasoning_effort, timeout_seconds: Overrides as on
+                :meth:`search_expanded`.
+            context: Extra guidance for the judge about the corpus.
+            propose: Also return a concrete proposal per pair (``judgement["proposal"]``:
+                kind ``merge`` / ``keep_separate`` / ``trim_overlap`` / ``cross_reference`` /
+                ``delete_one`` / ``review_conflict``, a rationale and the full proposed text
+                of each entry it would change) that :meth:`apply_pair_proposal` can
+                execute once a person approves it. Default True; False is faster.
+        """
+        body: dict[str, Any] = {"pairs": pair_refs(pairs)}
+        for key, value in (("speed", speed), ("model", model), ("reasoning_effort", reasoning_effort),
+                           ("timeout_seconds", timeout_seconds), ("context", context)):
+            if value is not None:
+                body[key] = value
+        if not propose:
+            body["propose"] = False
+        return await self._http.post(self._path("/similar-pairs/judge"), json=body)
+
+    async def apply_pair_proposal(
+        self,
+        judgement_id: str,
+        a_id: str,
+        b_id: str,
+        proposal: Mapping[str, Any],
+        *,
+        reason: str | None = None,
+        approved_by: str | None = None,
+    ) -> ApplyProposalResult:
+        """Execute a proposal a person approved (beta): the judge's proposal from
+        :meth:`judge_pairs` (or an edited copy) for one pair. Updates re-embed
+        through the ordinary entry update, deletions go through the ordinary
+        delete (protected entries are skipped), every entry is snapshotted
+        before it is touched (``changes[].previous``) and the application is
+        audited on the platform::
+
+            verdicts = kb.judge_pairs([(a, b)])
+            j = verdicts["judgements"][0]
+            if j["proposal"]["kind"] == "merge":
+                out = kb.apply_pair_proposal(verdicts["judgement_id"], j["a_id"], j["b_id"], j["proposal"],
+                                             reason="reviewed, duplicate confirmed")
+                out["status"]   # "applied" | "partial" | "failed" | "nothing_to_apply"
+
+        Args:
+            judgement_id: ``judgement_id`` of the judge call the proposal came from.
+            a_id, b_id: The pair.
+            proposal: ``{"kind", "rationale", "changes": [{"entry_id", "action", "content", "useful_for"}]}``.
+            reason, approved_by: Recorded on the audit row.
+        """
+        body: dict[str, Any] = {"judgement_id": judgement_id, "a_id": a_id, "b_id": b_id, "proposal": dict(proposal)}
+        if reason is not None:
+            body["reason"] = reason
+        if approved_by is not None:
+            body["approved_by"] = approved_by
+        return await self._http.post(self._path("/similar-pairs/apply"), json=body)
 
     # ── retrieval assertions ────────────────────────────────────
 

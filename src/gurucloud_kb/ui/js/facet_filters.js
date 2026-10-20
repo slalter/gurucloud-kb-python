@@ -202,3 +202,76 @@ export function facetsCaption(facets) {
   if (sources) parts.push(`${sources} source${sources === 1 ? '' : 's'}`);
   return `${parts.join(' · ')} across ${total} entries${facets.truncated_keys ? ' (more keys not shown)' : ''}.`;
 }
+
+/* ── key finder ──────────────────────────────────────────────────────────── */
+
+/** Keys that name a person or agent who acted on the entry (`decided_by`,
+    `approved_by`, `filed_by`, `swept_by`, `approver`, `reviewer`…). A bank
+    with 100+ metadata keys never ranks these into the six up-front selects
+    (each covers a handful of entries), yet "who approved this?" is the
+    first thing a person asks of a filter panel. */
+export const ACTOR_KEY_PATTERN = /(^|_)(by|approver|reviewer|owner|author|decider)$/i;
+
+export function isActorKey(key) {
+  return ACTOR_KEY_PATTERN.test(String(key || ''));
+}
+
+/** The ranked facets whose key names a person (see ACTOR_KEY_PATTERN), in rank order. */
+export function actorFacets(ranked) {
+  return (Array.isArray(ranked) ? ranked : []).filter((f) => f && isActorKey(f.key));
+}
+
+/**
+ * The ranked facets whose key contains `text` (case-insensitive; `_`, `-`
+ * and spaces are interchangeable, so "approved by" finds `approved_by`).
+ * Exact-prefix matches come first, then the rank order. An empty `text`
+ * matches nothing: the finder is additive to the up-front selects.
+ * @param {object[]} ranked  rankFacets() output
+ * @param {string} text
+ * @param {number} [limit]
+ */
+export function findFacetKeys(ranked, text, limit = 12) {
+  const norm = (s) => String(s || '').toLowerCase().replace(/[\s_-]+/g, '_').trim();
+  const q = norm(text);
+  if (!q) return [];
+  const list = (Array.isArray(ranked) ? ranked : []).filter((f) => f && f.key && norm(f.key).includes(q));
+  const starts = (f) => (norm(f.key).startsWith(q) ? 0 : 1);
+  return list.sort((a, b) => starts(a) - starts(b)).slice(0, Math.max(1, limit));
+}
+
+/* ── panel open/closed preference ───────────────────────────────────────── */
+
+/** localStorage key for whether the Filters panel is expanded on a bank. */
+export function filtersOpenStoreKey(kbId) {
+  return `kbx:filters-open:${kbId || 'kb'}`;
+}
+
+/** Whether the person last left the Filters panel expanded on this bank.
+    The panel carries up to six selects, the key finder, the who-acted-on-it
+    row, source and dates and pushes the entries below the fold, so it starts
+    COLLAPSED and opens only when the person expands it (remembered per bank). */
+export function readFiltersOpenPref(storage, kbId) {
+  try {
+    return storage != null && storage.getItem(filtersOpenStoreKey(kbId)) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function writeFiltersOpenPref(storage, kbId, open) {
+  try {
+    if (storage == null) return;
+    if (open) storage.setItem(filtersOpenStoreKey(kbId), '1');
+    else storage.removeItem(filtersOpenStoreKey(kbId));
+  } catch { /* private mode: not remembered */ }
+}
+
+/** The short caption for a collapsed Filters panel: key count and active filters. */
+export function collapsedFiltersCaption(facets, state) {
+  const keys = facets && Array.isArray(facets.facets) ? facets.facets.length : 0;
+  const active = activeFilterChips(state).length;
+  const parts = [];
+  parts.push(keys ? `${keys} metadata key${keys === 1 ? '' : 's'}` : 'metadata keys from the data');
+  parts.push(active ? `${active} filter${active === 1 ? '' : 's'} active` : 'no filters active');
+  return parts.join(' · ');
+}

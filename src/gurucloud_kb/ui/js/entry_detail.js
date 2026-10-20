@@ -8,6 +8,7 @@ import { openModal, confirmModal } from './modal.js';
 import { customDims, dimsOf, kindOf, kindDim, knownValues } from './schema_utils.js';
 import { entryToPlaybookDraft } from './promote.js';
 import { openPlaybookEditor } from './playbook_editor.js';
+import { renderConnectionsSection } from './connections.js';
 
 const HIDDEN_META = new Set(['is_example', 'is_gotcha']);
 
@@ -71,9 +72,17 @@ export async function openEntryDetail(ctx, entryId, { onChanged } = {}) {
         h('pre', { class: 'kbx-code kbx-mt', style: { whiteSpace: 'pre-wrap' } }, JSON.stringify(Object.fromEntries(extraMeta), null, 2)))
     : null;
 
+  // Connections (kanban c0cab0a7): typed links to other entries, both
+  // directions, with add / remove and a neighbourhood graph. Opening the
+  // other end swaps this modal for that entry's detail.
+  const connections = renderConnectionsSection(ctx, entry, {
+    onOpenEntry: (id) => { ref.close(); openEntryDetail(ctx, id, { onChanged }); },
+    onChanged: (kind, edge) => { if (onChanged) onChanged(kind, edge); },
+  });
+
   ref.setBody(h('div', {},
     chips.some(Boolean) ? h('div', { class: 'kbx-row', style: { gap: '6px', marginBottom: '12px' } }, ...chips) : null,
-    kv, metaBlock));
+    kv, metaBlock, connections));
 
   const editBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', onClick: () => { ref.close(); openEditModal(ctx, entry, onChanged); } }, h('i', { class: 'bi bi-pencil' }), 'Edit');
   const promoteBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', title: 'Turn this entry into an ordered procedure agents retrieve whole', onClick: () => {

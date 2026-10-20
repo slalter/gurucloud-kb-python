@@ -40,4 +40,5 @@ def test_generated_characterization_test_imports_the_mirror(tmp_path: Path):
 
 
 def test_version_bumped_with_the_harness():
-    assert gurucloud_kb.__version__ == "0.6.0"
+    # The module-registry harness shipped in 0.7.0; every later release keeps it.
+    assert tuple(int(x) for x in gurucloud_kb.__version__.split(".")[:3]) >= (0, 7, 0)

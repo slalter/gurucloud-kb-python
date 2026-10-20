@@ -11,12 +11,14 @@
                                                      (platform mode) and send it on
                                                      every API call
      ></div>
-   Panels: Entries · Map · Playbooks · Schema · Quality · History · Connect. */
+   Panels: Entries · Map · Graph · Similar · Playbooks · Schema · Quality · History · Connect. */
 
 import { h, mount, toast } from './dom.js';
 import { createApi } from './api.js';
 import { createEntriesView } from './entries.js';
 import { createMapView } from './map.js';
+import { createGraphView } from './graph.js';
+import { createSimilarView } from './similar.js';
 import { createPlaybooksView } from './playbooks.js';
 import { createSchemaView } from './schema.js';
 import { createQualityView } from './quality.js';
@@ -28,6 +30,8 @@ import { tileValues } from './stats_view.js';
 const PANELS = [
   { id: 'entries', label: 'Entries', icon: 'bi-collection', make: createEntriesView },
   { id: 'map', label: 'Map', icon: 'bi-diagram-3', make: createMapView },
+  { id: 'graph', label: 'Graph', icon: 'bi-share', make: createGraphView },
+  { id: 'similar', label: 'Similar', icon: 'bi-intersect', make: createSimilarView },
   { id: 'playbooks', label: 'Playbooks', icon: 'bi-journal-text', make: createPlaybooksView },
   { id: 'schema', label: 'Schema', icon: 'bi-diagram-2', make: createSchemaView },
   { id: 'quality', label: 'Quality', icon: 'bi-bullseye', make: createQualityView },

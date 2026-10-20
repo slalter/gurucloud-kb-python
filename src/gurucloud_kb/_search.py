@@ -57,6 +57,7 @@ def build_string_search(
     updated_before: Optional[DateInput] = None,
     event_after: Optional[DateInput] = None,
     event_before: Optional[DateInput] = None,
+    collapse: "bool | Mapping[str, Any] | None" = None,
 ) -> dict[str, Any]:
     """Build a request body for a simple single-string query.
 
@@ -82,7 +83,23 @@ def build_string_search(
         iso = _iso(val)
         if iso is not None:
             req[key] = iso
-    return req
+    return apply_collapse(req, collapse)
+
+
+def apply_collapse(request: dict[str, Any], collapse: "bool | Mapping[str, Any] | None") -> dict[str, Any]:
+    """Add the ``collapse`` option to a request body: ``True`` takes the
+    server defaults (``{}``), a mapping passes ``pool`` / ``guard_top_n`` /
+    ``max_related`` through, ``False`` removes it, ``None`` leaves the body
+    as it is."""
+    if collapse is None:
+        return request
+    if collapse is False:
+        request.pop("collapse", None)
+    elif collapse is True:
+        request["collapse"] = {}
+    else:
+        request["collapse"] = dict(collapse)
+    return request
 
 
 def normalize_search_request(request: Mapping[str, Any]) -> dict[str, Any]:
@@ -231,3 +248,37 @@ def build_list_params(
         if iso is not None:
             params[key] = iso
     return params
+
+
+# ── similar pairs (beta) ──────────────────────────────────────
+
+
+def normalize_pair_scope(scope: Mapping[str, Any]) -> dict[str, Any]:
+    """The ``scope`` block of ``POST /banks/{kb}/similar-pairs``: the list
+    filters (``metadata_filters``, ``source``, time bounds) with ``datetime``
+    bounds serialized to ISO-8601."""
+    out: dict[str, Any] = {}
+    for key, val in scope.items():
+        if key in TIME_FILTER_KEYS:
+            iso = _iso(val)
+            if iso is not None:
+                out[key] = iso
+        elif val is not None:
+            out[key] = val
+    return out
+
+
+def pair_refs(pairs: Any) -> list[dict[str, str]]:
+    """``[(a, b), ...]`` or ``[{"a_id": a, "b_id": b}, ...]`` -> the wire list."""
+    refs: list[dict[str, str]] = []
+    for item in pairs:
+        if isinstance(item, Mapping):
+            a, b = item.get("a_id"), item.get("b_id")
+        else:
+            a, b = tuple(item)
+        if not a or not b:
+            raise ValueError("each pair needs two entry ids (a_id, b_id)")
+        refs.append({"a_id": str(a), "b_id": str(b)})
+    if not refs:
+        raise ValueError("pairs must not be empty")
+    return refs

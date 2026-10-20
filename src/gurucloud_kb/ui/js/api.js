@@ -107,6 +107,18 @@ export function createApi(kbId, base, opts = {}) {
     search: (payload) => req('POST', '/search', { body: payload }),
     searchExpanded: (payload) => req('POST', '/search/expanded', { body: payload }),
     cluster: (payload) => req('POST', '/cluster', { body: payload }),
+    similarPairs: (payload) => req('POST', '/similar-pairs', { body: payload }),
+    judgePairs: (payload) => req('POST', '/similar-pairs/judge', { body: payload }),
+    applyProposal: (payload) => req('POST', '/similar-pairs/apply', { body: payload }),
+
+    entryConnections: (id) => req('GET', `/entries/${encodeURIComponent(id)}/edges`),
+    addEdges: (payload) => req('POST', '/edges', { body: payload }),
+    deleteEdge: (id, params) => req('DELETE', `/edges/${encodeURIComponent(id)}`, { params }),
+    listEdges: (params) => req('GET', '/edges', { params }),
+    edgeStats: () => req('GET', '/edge-stats'),
+    edgeRelations: () => req('GET', '/edge-relations'),
+    graph: (params) => req('GET', '/graph', { params }),
+    backfillEdges: (payload) => req('POST', '/edges/backfill', { body: payload }),
     // assertions
     listAssertions: (params) => req('GET', '/assertions', { params }),
     createAssertion: (payload) => req('POST', '/assertions', { body: payload }),
