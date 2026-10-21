@@ -49,7 +49,9 @@ from gurucloud_kb.types import (
     EdgeRelationVocabulary,
     EdgeType,
     EntryConnections,
+    GraphLayout,
     GraphNeighborhood,
+    StartLayout,
     JudgePairsResult,
     MetadataFacets,
     SimilarPairsResult,
@@ -729,6 +731,14 @@ class AsyncKnowledgeBank:
     async def connection_stats(self) -> EdgeStats:
         """Counts by type and by source, and how many entries are connected."""
         return await self._http.get(self._path("/edge-stats"))
+
+    async def graph_layout(self, *, space: str = "content") -> GraphLayout:
+        """Async ``KnowledgeBank.graph_layout``."""
+        return await self._http.get(self._path("/graph/layout"), params={"space": space})
+
+    async def recompute_graph_layout(self, *, space: str = "content") -> StartLayout:
+        """Async ``KnowledgeBank.recompute_graph_layout``."""
+        return await self._http.post(self._path("/graph/layout/recompute"), params={"space": space})
 
     async def graph(self, root: str, *, depth: int = 1, limit: int = 150) -> GraphNeighborhood:
         """The neighbourhood of ``root`` up to ``depth`` hops (1-3) in either

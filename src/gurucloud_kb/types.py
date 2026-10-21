@@ -1263,6 +1263,44 @@ class GraphNeighborhood(TypedDict, total=False):
     truncated: bool  # the node cap cut the walk short
 
 
+class LayoutRun(TypedDict, total=False):
+    """One semantic-layout projection run (``computing`` -> ``ready`` | ``failed``)."""
+
+    id: str
+    space: str
+    status: str
+    method: str  # umap | tsne | pca
+    params: dict[str, Any]
+    entry_count: int
+    started_at: str
+    finished_at: str
+    duration_ms: float
+    error: str
+    requested_by: str
+
+
+class GraphLayout(TypedDict, total=False):
+    """``kb.graph_layout(space=...)``: where each connected entry sits in a
+    3-axis projection of its embeddings (each coordinate in [-1, 1])."""
+
+    space: str  # content | useful_for | both
+    status: str  # ready | computing | failed | unavailable | empty
+    stale: bool  # a refresh is due (and has been started) while these positions are served
+    connected_entries: int
+    run: LayoutRun
+    computing: LayoutRun  # a projection in flight
+    positions: dict[str, list[float]]
+    reason: str
+
+
+class StartLayout(TypedDict, total=False):
+    """``kb.recompute_graph_layout(space=...)``."""
+
+    started: bool
+    run: LayoutRun
+    reason: str
+
+
 class ConnectionBackfillReport(TypedDict, total=False):
     """``kb.backfill_connections(...)``: what the bank's own text and metadata implied."""
 

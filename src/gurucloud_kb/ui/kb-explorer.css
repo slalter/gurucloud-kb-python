@@ -550,3 +550,13 @@
 .kbx .kbx-ptr.muted { border-left-color: var(--kbx-border); color: var(--kbx-muted); cursor: default; }
 .kbx .kbx-graph-raw { max-height: 360px; overflow: auto; font-size: 11px; line-height: 1.4; background: #1f2a2c; color: #d9e6e8; padding: 10px; border-radius: var(--kbx-radius-sm); margin-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .kbx .kbx-graph-selected-text { font-size: var(--mk-para-s-size); line-height: 1.45; margin-top: 6px; overflow-wrap: anywhere; }
+
+/* ── Graph tab in 3D (3d-force-graph) ─────────────────────────────────── */
+.kbx .kbx-graph3d-wrap { background: #0f1719; background-image: none; min-height: 620px; }
+.kbx .kbx-graph3d { position: absolute; inset: 0; }
+.kbx .kbx-graph3d canvas { outline: none; }
+.kbx .kbx-graph3d-wrap .kbx-map-legend { background: rgba(15,23,25,.82); color: #cfe0e3; border-color: #24363b; }
+.kbx .kbx-graph3d-wrap .kbx-map-hud .kbx-chip.muted { background: rgba(15,23,25,.85); color: #cfe0e3; }
+.kbx .kbx-graph3d-wrap .kbx-map-hud .kbx-btn { background: rgba(15,23,25,.85); color: #cfe0e3; border-color: #24363b; }
+.kbx-graph-tip { max-width: 320px; font: 12px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color: #e6eef0; background: rgba(15,23,25,.96); border: 1px solid #24363b; border-radius: 8px; padding: 8px 10px; }
+.kbx .kbx-graph3d .graph-tooltip { padding: 0; background: transparent; }

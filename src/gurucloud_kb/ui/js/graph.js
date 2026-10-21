@@ -1,187 +1,149 @@
-/* Graph tab — the bank's knowledge graph, searched the way an agent searches it.
+/* Graph tab — the bank's knowledge graph in 3D, searched the way an agent searches it.
 
-   Two states:
-     • no query: the whole bank as constellations (every entry_edges row,
-       laid out component by component, no overlap; GET /edges paged);
-     • a query: POST /search with the Graph tab's knobs (k, collapse on/off,
-       neighbors per result) rendered twice — the ANSWER as the agent reads it
-       (ranked results, `related` pointers with relation, kind, text and note,
-       the collapse summary, raw JSON on demand) and the same answer as a
-       graph. By default the answer is painted onto the whole-bank picture
-       (retrieved entries and the entries the pointers name light up with
-       their connections, everything else dims, the camera fits the lit set;
-       entries with no connections yet are added in a row underneath);
-       "Answer only" draws just the answer with dagre.
+   One three.js force graph (3d-force-graph, loaded on first use from the
+   bundle's vendor/) shows every entry-to-entry connection in the bank. A
+   query runs the bank's real search with the agent's knobs (top-K, collapse
+   on/off, neighbors per result) and paints the answer onto that picture:
+   retrieved entries and the entries the pointers name light up, particles
+   travel along the edges the agent was told about, and everything else
+   shrinks to dust (default), hides, or merely dims. The right-hand panel
+   shows the answer as the agent reads it (ranked results, `related`
+   pointers with relation, kind, text and note, the collapse summary, raw
+   request + response JSON).
 
-   Pure logic lives in graph_model.js (Node-tested); this file is DOM only. */
+   Layout is the graph's own forces, or semantic: the service's
+   GET /graph/layout projects the connected entries' embeddings to three
+   axes (kb_service/graph_layout.py) so distance means meaning and the edges
+   show where the graph cuts across it. The first request starts the
+   projection in the background; the tab polls until it is ready.
+
+   Pure logic lives in graph_model.js (Node-tested); this file is DOM/WebGL. */
 
 import { h, mount, clear, toast, skeleton, esc, num } from './dom.js';
 import { openEntryDetail } from './entry_detail.js';
 import {
-  DEFAULTS, MAX_BANK_EDGES, RELATION_COLORS, agentView, bankGraph, edgePages, labelFor, normalizeOptions, overlayPlan, pointerLine,
-  resultsOf, searchGraph, searchPayload, settingsKey,
+  DEFAULTS, MAX_BANK_EDGES, RELATION_COLORS, agentView, edgePages, labelFor, layoutCaption, normalizeOptions, pictureOptions,
+  pinPositions, pointerLine, resultsOf, scene, searchGraph, searchPayload, settingsKey,
 } from './graph_model.js';
 
-const COLORS = { hit: '#72a6ab', hitBorder: '#456f73', folded: '#f2b23a', foldedBorder: '#a06a00', neighbor: '#cfd8d9', neighborBorder: '#8a9a9c', ctx: '#e6e3dc', ctxBorder: '#b7b3a8', bank: '#72a6ab', bankBorder: '#456f73', text: '#2b2f2b' };
+const COLORS = { hit: '#5ee0c8', folded: '#f2b23a', neighbor: '#b7c4c6', ctx: '#8fa6aa', bank: '#72a6ab', bankDim: '#2d4448', dust: '#3a5054', bg: '#0f1719', selected: '#ffffff' };
+const SEM_SCALE = 420;
+const POLL_MS = 4000;
+const POLL_MAX = 40;
+
+/** Load the 3D library next to this module the first time the tab opens. */
+let libPromise = null;
+function ensureLib() {
+  if (window.ForceGraph3D) return Promise.resolve();
+  if (!libPromise) {
+    libPromise = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = new URL('../vendor/3d-force-graph.min.js', import.meta.url).href;
+      s.onload = () => (window.ForceGraph3D ? resolve() : reject(new Error('3d-force-graph did not register')));
+      s.onerror = () => reject(new Error('could not load vendor/3d-force-graph.min.js'));
+      document.head.appendChild(s);
+    });
+  }
+  return libPromise;
+}
 
 export function createGraphView(ctx) {
   const { api } = ctx;
   const el = h('div', {});
-  let cy = null;
+  let fg = null;
   let loaded = false;
-  let bankEdges = null;     // every edge in the bank, once fetched
-  let bankEnds = {};        // id -> entry-like (labels learnt from searches and clicks)
-  let lastAnswer = null;    // { payload, data, results, view, graph }
+  let bankEdges = null;          // every entry-to-entry edge in the bank (paged GET /edges)
+  let extraEdges = [];           // edges revealed by "Show its connections"
+  const bankEnds = {};           // id -> entry-like, for labels
+  let lastAnswer = null;         // { payload, data, results, connections }
+  const layouts = {};            // space -> GET /graph/layout body
+  let pollTimer = null;
+  let pollCount = 0;
   let busy = false;
+  let selectedId = null;
 
   // ── controls ───────────────────────────────────────────────────────────────
   const queryInput = h('input', { class: 'kbx-input', type: 'search', placeholder: 'Ask the bank the way an agent would…', dataset: { role: 'graph-query' } });
   const kInput = h('input', { class: 'kbx-input', type: 'number', min: '1', max: '20', value: String(DEFAULTS.k), title: 'Results returned (top-K)', dataset: { role: 'graph-k' } });
   const collapseCb = h('input', { type: 'checkbox', checked: DEFAULTS.collapse, dataset: { role: 'graph-collapse' } });
   const neighborsSel = h('select', { class: 'kbx-select', dataset: { role: 'graph-neighbors' } }, ...[0, 1, 2, 3, 4, 5, 6].map((n) => h('option', { value: String(n), selected: n === DEFAULTS.maxNeighbors ? true : undefined }, `${n} per result`)));
-  const contextCb = h('input', { type: 'checkbox', checked: DEFAULTS.context ? true : undefined, dataset: { role: 'graph-context' } });
-  const viewSel = h('select', { class: 'kbx-select', dataset: { role: 'graph-view' }, title: 'In the bank: the answer lit up inside the whole-bank picture. Answer only: just the retrieved entries and their pointers.' }, h('option', { value: 'bank' }, 'In the bank'), h('option', { value: 'answer' }, 'Answer only'));
+  const contextCb = h('input', { type: 'checkbox', dataset: { role: 'graph-context' } });
+  const focusSel = h('select', { class: 'kbx-select', dataset: { role: 'graph-focus' }, title: 'What happens to everything that is not part of the answer' },
+    h('option', { value: 'shrink' }, 'shrink the rest'), h('option', { value: 'only' }, 'answer only'), h('option', { value: 'dim' }, 'dim the rest'));
+  const layoutSel = h('select', { class: 'kbx-select', dataset: { role: 'graph-layout' }, title: 'Where entries sit: pulled by their connections, or placed by a projection of their embeddings so distance means meaning' },
+    h('option', { value: 'force' }, 'by connections (force)'), h('option', { value: 'content' }, 'by meaning: content'), h('option', { value: 'useful_for' }, 'by meaning: useful_for'), h('option', { value: 'both' }, 'by meaning: both'));
+  const backfillCb = h('input', { type: 'checkbox', checked: true, dataset: { role: 'graph-hide-backfill' } });
   const searchBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', dataset: { role: 'graph-search' }, onClick: runSearch }, h('i', { class: 'bi bi-search' }), 'Search');
-  const clearBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { role: 'graph-clear' }, onClick: () => { queryInput.value = ''; lastAnswer = null; drawBank(); } }, 'Whole bank');
+  const clearBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { role: 'graph-clear' }, onClick: () => { queryInput.value = ''; lastAnswer = null; render(); } }, 'Whole bank');
   queryInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') runSearch(); });
-  [kInput, collapseCb, neighborsSel, contextCb, viewSel].forEach((i) => i.addEventListener('change', () => { saveSettings(); if (lastAnswer && (i === contextCb || i === viewSel)) redrawAnswer(); }));
   collapseCb.addEventListener('change', () => { neighborsSel.disabled = !collapseCb.checked; });
+  [kInput, collapseCb, neighborsSel].forEach((i) => i.addEventListener('change', saveSettings));
+  [contextCb, focusSel, backfillCb].forEach((i) => i.addEventListener('change', () => { saveSettings(); render(); }));
+  layoutSel.addEventListener('change', () => { saveSettings(); render(); });
 
   const toolbar = h('div', { class: 'kbx-card' },
     h('div', { class: 'kbx-card-head' },
-      h('div', {}, h('h3', { class: 'kbx-card-title' }, 'Graph'), h('div', { class: 'kbx-card-sub' }, 'Search the bank the way an agent does and see both what comes back and how it hangs together. No query shows every connection in the bank.')),
+      h('div', {}, h('h3', { class: 'kbx-card-title' }, 'Graph'), h('div', { class: 'kbx-card-sub' }, 'Search the bank the way an agent does and see both what comes back and how it hangs together. Drag to rotate, wheel to zoom, click a node to fly to it.')),
       h('div', { class: 'kbx-row', style: { gap: '6px' } }, clearBtn, searchBtn)),
     h('div', { class: 'kbx-map-toolbar' },
       h('div', { class: 'kbx-field', style: { flex: '1 1 320px' } }, h('label', {}, 'Query (what the agent asks)'), queryInput),
       field('Top-K', kInput),
       h('div', { class: 'kbx-field' }, h('label', {}, ' '), h('label', { class: 'kbx-check', title: 'Fold connected results into one representative with related pointers (the default every agent gets)' }, collapseCb, 'Collapse (pointers)')),
       field('Neighbors', neighborsSel),
-      h('div', { class: 'kbx-field' }, h('label', {}, ' '), h('label', { class: 'kbx-check', title: 'Also draw every other connection of the retrieved entries, not only the ones the agent is told about' }, contextCb, 'Show other connections')),
-      field('Picture', viewSel)));
+      h('div', { class: 'kbx-field' }, h('label', {}, ' '), h('label', { class: 'kbx-check', title: 'Also light up every other connection of the retrieved entries, not only the ones the agent is told about' }, contextCb, 'Other connections')),
+      field('Rest of the bank', focusSel),
+      field('Layout', layoutSel),
+      h('div', { class: 'kbx-field' }, h('label', {}, ' '), h('label', { class: 'kbx-check', title: 'Hide the note-less split_from edges the metadata backfill wrote; they turn every picture into a hairball' }, backfillCb, 'Hide backfill siblings'))));
   function field(label, input) { return h('div', { class: 'kbx-field' }, h('label', {}, label), input); }
 
   // ── stage ──────────────────────────────────────────────────────────────────
-  const canvas = h('div', { class: 'kbx-map-canvas', dataset: { role: 'graph-canvas' } });
+  const canvas = h('div', { class: 'kbx-map-canvas kbx-graph3d', dataset: { role: 'graph-canvas' } });
   const overlay = h('div', { class: 'kbx-map-overlay', style: { display: 'none' } });
-  const tip = h('div', { class: 'kbx-map-tip' });
   const caption = h('span', { class: 'kbx-chip muted', dataset: { role: 'graph-caption' } }, '…');
+  const layoutChip = h('span', { class: 'kbx-chip muted', dataset: { role: 'graph-layout-chip' }, style: { display: 'none' } }, '');
+  const recomputeBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Recompute the semantic layout now', dataset: { role: 'graph-recompute' }, style: { display: 'none' }, onClick: recompute }, h('i', { class: 'bi bi-arrow-repeat' }));
   const hud = h('div', { class: 'kbx-map-hud' },
-    caption,
-    h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Fit', onClick: () => cy && cy.animate({ fit: { padding: 30 } }, { duration: 250 }) }, h('i', { class: 'bi bi-arrows-fullscreen' })),
-    h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Zoom in', onClick: () => zoomBy(1.3) }, h('i', { class: 'bi bi-zoom-in' })),
-    h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Zoom out', onClick: () => zoomBy(1 / 1.3) }, h('i', { class: 'bi bi-zoom-out' })));
+    caption, layoutChip, recomputeBtn,
+    h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Fit', dataset: { role: 'graph-fit' }, onClick: () => fitView() }, h('i', { class: 'bi bi-arrows-fullscreen' })));
   const legend = h('div', { class: 'kbx-map-legend kbx-graph-legend' },
     h('span', {}, h('i', { class: 'g-hit' }), 'retrieved (#rank)'),
     h('span', {}, h('i', { class: 'g-folded' }), 'pointer: folded into a result'),
     h('span', {}, h('i', { class: 'g-neighbor' }), 'pointer: one hop off the results'),
     h('span', {}, h('i', { class: 'g-ctx' }), 'other connection'),
-    h('span', {}, h('i', { class: 'g-edge' }), 'edge the agent is told about'));
-  const canvasWrap = h('div', { class: 'kbx-map-canvas-wrap' }, canvas, hud, legend, tip, overlay);
+    h('span', {}, h('i', { class: 'g-edge' }), 'edge the agent is told about (particles)'));
+  const canvasWrap = h('div', { class: 'kbx-map-canvas-wrap kbx-graph3d-wrap' }, canvas, hud, legend, overlay);
 
   const answerHost = h('div', { dataset: { role: 'graph-answer' } });
   const selectedHost = h('div', { dataset: { role: 'graph-selected' } }, h('div', { class: 'kbx-hint' }, 'Click a node to see the entry and its connections.'));
   const side = h('div', { class: 'kbx-map-side' },
     h('div', { class: 'kbx-side-card' }, h('div', { class: 'kbx-side-title' }, 'What the agent gets back'), answerHost),
     h('div', { class: 'kbx-side-card' }, h('div', { class: 'kbx-side-title' }, 'Selected'), selectedHost));
-  const stage = h('div', { class: 'kbx-map-stage' }, canvasWrap, side);
-  mount(el, toolbar, stage);
+  mount(el, toolbar, h('div', { class: 'kbx-map-stage' }, canvasWrap, side));
 
-  function zoomBy(f) { if (cy) cy.zoom({ level: cy.zoom() * f, renderedPosition: { x: canvas.clientWidth / 2, y: canvas.clientHeight / 2 } }); }
   function showOverlay(node) { mount(overlay, node); overlay.style.display = 'flex'; }
   function hideOverlay() { overlay.style.display = 'none'; }
 
   // ── settings (per bank, per viewer) ───────────────────────────────────────
   const storeKey = settingsKey(api.kbId);
-  function saveSettings() { try { localStorage.setItem(storeKey, JSON.stringify(options())); } catch { /* ignore */ } }
+  function options() { return normalizeOptions({ k: kInput.value, collapse: collapseCb.checked, maxNeighbors: neighborsSel.value, context: contextCb.checked }); }
+  function picture() { return pictureOptions({ focus: focusSel.value, layout: layoutSel.value, hideBackfill: backfillCb.checked }); }
+  function saveSettings() { try { localStorage.setItem(storeKey, JSON.stringify({ ...options(), ...picture() })); } catch { /* ignore */ } }
   function loadSettings() {
     let s = null;
     try { s = JSON.parse(localStorage.getItem(storeKey) || 'null'); } catch { s = null; }
     if (!s) return;
-    const o = normalizeOptions(s);
-    kInput.value = String(o.k); collapseCb.checked = o.collapse; neighborsSel.value = String(o.maxNeighbors); contextCb.checked = o.context; viewSel.value = o.view;
-    neighborsSel.disabled = !o.collapse;
-  }
-  function options() { return normalizeOptions({ k: kInput.value, collapse: collapseCb.checked, maxNeighbors: neighborsSel.value, context: contextCb.checked, view: viewSel.value }); }
-
-  // ── drawing ────────────────────────────────────────────────────────────────
-  function baseStyle() {
-    const relColor = (e) => RELATION_COLORS[e.data('relation')] || RELATION_COLORS.connected;
-    return [
-      { selector: 'node', style: { shape: 'round-rectangle', 'background-color': COLORS.hit, 'border-color': COLORS.hitBorder, 'border-width': 1.5, color: '#fff', label: 'data(label)', 'text-wrap': 'wrap', 'text-max-width': 170, 'font-size': 11, 'font-weight': 600, 'text-valign': 'center', 'text-halign': 'center', width: 'label', height: 'label', padding: '8px', 'font-family': 'Aspekta, -apple-system, Segoe UI, Roboto, sans-serif' } },
-      { selector: 'node.hit', style: { 'z-index': 10 } },
-      { selector: 'node.folded', style: { 'background-color': COLORS.folded, 'border-color': COLORS.foldedBorder, color: '#3d2a00', 'font-weight': 500 } },
-      { selector: 'node.neighbor', style: { 'background-color': COLORS.neighbor, 'border-color': COLORS.neighborBorder, color: COLORS.text, 'font-weight': 500 } },
-      { selector: 'node.ctx', style: { 'background-color': COLORS.ctx, 'border-color': COLORS.ctxBorder, color: '#5b5b5b', 'font-weight': 400, 'font-size': 10 } },
-      // Constellation dots carry no label until selected: at the zoom a small bank fits to, every label
-      // would be poster-sized and two neighbours' labels would print over each other.
-      { selector: 'node.bank', style: { shape: 'ellipse', width: 'data(d)', height: 'data(d)', padding: '0px', 'background-color': COLORS.bank, 'border-color': COLORS.bankBorder, 'border-width': 1, label: '' } },
-      { selector: 'node.bank.hit', style: { width: 22, height: 22, 'background-color': COLORS.hit, 'border-color': '#2e3538', 'border-width': 2.5, label: 'data(label)', 'font-size': 10, 'font-weight': 600, color: COLORS.text, 'text-valign': 'bottom', 'text-margin-y': 5, 'text-wrap': 'wrap', 'text-max-width': 150, 'text-background-color': '#fbfaf7', 'text-background-opacity': 0.9, 'text-background-padding': '2px', 'z-index': 11 } },
-      // Pointer targets in the bank picture stay unlabelled (hover or select for the text): their labels sat on top of the hits' labels in a tight constellation.
-      { selector: 'node.bank.folded', style: { width: 14, height: 14, 'background-color': COLORS.folded, 'border-color': COLORS.foldedBorder, 'border-width': 1.5, 'z-index': 10 } },
-      { selector: 'node.bank.neighbor', style: { width: 14, height: 14, 'background-color': COLORS.neighbor, 'border-color': COLORS.neighborBorder, 'border-width': 1.5, 'z-index': 10 } },
-      { selector: 'node.bank.ctx', style: { 'background-color': COLORS.ctx, 'border-color': COLORS.ctxBorder } },
-      { selector: 'node.dim', style: { opacity: 0.14 } },
-      { selector: 'edge.dim', style: { opacity: 0.08 } },
-      { selector: 'node.bank:selected', style: { label: 'data(label)', 'font-size': 10, 'font-weight': 500, color: COLORS.text, 'text-valign': 'bottom', 'text-margin-y': 5, 'text-wrap': 'wrap', 'text-max-width': 150, 'text-background-color': '#fbfaf7', 'text-background-opacity': 0.9, 'text-background-padding': '2px', 'background-color': COLORS.folded, 'border-color': COLORS.foldedBorder, 'z-index': 10 } },
-      { selector: 'node:selected', style: { 'border-width': 3, 'border-color': '#2e3538' } },
-      { selector: 'edge', style: { 'curve-style': 'bezier', 'target-arrow-shape': 'triangle', 'arrow-scale': 0.8, width: 1.4, 'line-color': relColor, 'target-arrow-color': relColor, opacity: 0.85, label: 'data(label)', 'font-size': 9, color: COLORS.text, 'text-background-color': '#fbfaf7', 'text-background-opacity': 1, 'text-background-padding': '2px', 'text-rotation': 'autorotate' } },
-      { selector: 'edge.pointer', style: { width: 2.6, opacity: 1 } },
-      { selector: 'edge.ctx', style: { opacity: 0.45, 'line-style': 'dashed', label: '' } },
-      { selector: 'edge.bank', style: { label: '', width: 1, opacity: 0.6, 'arrow-scale': 0.5 } },
-      { selector: 'edge[source_kind = "backfill_metadata"]', style: { 'line-style': 'dotted' } },
-      { selector: 'edge.lit', style: { width: 2.8, opacity: 1, 'z-index': 9 } },
-    ];
+    const o = normalizeOptions(s); const p = pictureOptions(s);
+    kInput.value = String(o.k); collapseCb.checked = o.collapse; neighborsSel.value = String(o.maxNeighbors); contextCb.checked = o.context;
+    neighborsSel.disabled = !o.collapse; focusSel.value = p.focus; layoutSel.value = p.layout; backfillCb.checked = p.hideBackfill;
   }
 
-  function makeCy(elements, layout, { maxZoom = 6 } = {}) {
-    if (cy) { cy.destroy(); cy = null; }
-    if (!window.cytoscape) { showOverlay(h('div', { class: 'kbx-alert danger' }, 'Graph library not loaded.')); return null; }
-    cy = window.cytoscape({ container: canvas, elements, layout, style: baseStyle(), minZoom: 0.05, maxZoom, wheelSensitivity: 0.25, boxSelectionEnabled: false });
-    cy.on('tap', 'node', (evt) => selectNode(evt.target));
-    cy.on('mouseover', 'node', (evt) => showTip(evt));
-    cy.on('mouseover', 'edge', (evt) => showEdgeTip(evt));
-    cy.on('mouseout', 'node, edge', () => { tip.style.display = 'none'; });
-    return cy;
-  }
-
-  function layoutFor(graph) {
-    const n = graph.nodes.length;
-    if (window.cytoscape && n) {
-      try { return { name: 'dagre', rankDir: n > 24 ? 'TB' : 'LR', nodeSep: 22, rankSep: 90, edgeSep: 16, padding: 20, fit: true }; } catch { /* fall through */ }
-    }
-    return { name: 'cose', animate: false, fit: true, padding: 20 };
-  }
-
-  function showTip(evt) {
-    const d = evt.target.data();
-    const parts = [];
-    if (d.kind === 'hit') parts.push(`<span class="kbx-tip-k">#${d.rank}</span>score ${Number(d.score).toFixed(3)}`);
-    else if (d.kind === 'folded' || d.kind === 'neighbor') parts.push(`<span class="kbx-tip-k">${d.kind}</span>${esc(String(d.relation || '').replace(/_/g, ' '))}`);
-    else if (d.kind === 'bank') parts.push(`<span class="kbx-tip-k">${d.degree} connection${d.degree === 1 ? '' : 's'}</span>`);
-    if (d.text) parts.push(esc(d.text));
-    if (d.note) parts.push(`<i>${esc(d.note)}</i>`);
-    if (!d.text && d.kind === 'bank') parts.push(`<span class="kbx-mono">${esc(String(d.id).slice(0, 8))}</span> · click to load`);
-    placeTip(evt, parts.map((p) => `<div>${p}</div>`).join(''));
-  }
-  function showEdgeTip(evt) {
-    const d = evt.target.data();
-    placeTip(evt, `<div><span class="kbx-tip-k">${esc(String(d.relation || '').replace(/_/g, ' '))}</span>${esc(d.source_kind || '')}</div>${d.note ? `<div><i>${esc(d.note)}</i></div>` : '<div class="kbx-muted">no note</div>'}`);
-  }
-  function placeTip(evt, html) {
-    tip.innerHTML = html;
-    const p = evt.renderedPosition || (evt.target.renderedPosition && evt.target.renderedPosition());
-    if (!p) return;
-    tip.style.left = `${Math.min(p.x, canvas.clientWidth - 320)}px`; tip.style.top = `${p.y}px`; tip.style.display = 'block';
-  }
-
-  // ── whole bank ─────────────────────────────────────────────────────────────
+  // ── data ───────────────────────────────────────────────────────────────────
   async function fetchBankEdges() {
     if (bankEdges) return bankEdges;
     const stats = await api.edgeStats();
     const total = Number(stats && stats.total) || 0;
-    const pages = edgePages(Math.min(total, MAX_BANK_EDGES));
     const out = [];
-    for (const page of pages) { // sequential: the service lists newest first; order within is stable
+    for (const page of edgePages(Math.min(total, MAX_BANK_EDGES))) {
       const resp = await api.listEdges(page);
       out.push(...((resp && resp.edges) || []));
     }
@@ -190,25 +152,135 @@ export function createGraphView(ctx) {
     return out;
   }
 
-  async function drawBank() {
-    clear(answerHost);
-    answerHost.append(h('div', { class: 'kbx-hint' }, 'Type a query and press Search to see what an agent would get back for it.'));
-    showOverlay(skeleton('Loading the bank’s connections…'));
-    let edges;
-    try { edges = await fetchBankEdges(); }
-    catch (e) { showOverlay(h('div', { class: 'kbx-alert danger' }, `Could not load connections: ${e.message}`)); return; }
-    if (!edges.length) {
-      hideOverlay();
-      if (cy) { cy.destroy(); cy = null; }
-      caption.textContent = 'no connections yet';
-      showOverlay(h('div', { class: 'kbx-empty' }, h('i', { class: 'bi bi-share' }), h('h4', {}, 'No connections yet'), h('div', {}, 'Agents add them with report_learning connections; the backfill reads citations and typed metadata.')));
+  async function fetchLayout(space) {
+    try { layouts[space] = await api.graphLayout({ space }); }
+    catch (e) { layouts[space] = { space, status: 'unavailable', reason: e.message }; }
+    return layouts[space];
+  }
+
+  function stopPolling() { if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; } pollCount = 0; }
+  function pollLayout(space) {
+    stopPolling();
+    const tick = async () => {
+      pollCount += 1;
+      const body = await fetchLayout(space);
+      if (body.status === 'computing' && pollCount < POLL_MAX && picture().layout === space) { pollTimer = setTimeout(tick, POLL_MS); return; }
+      pollTimer = null;
+      if (picture().layout === space) render();
+    };
+    pollTimer = setTimeout(tick, POLL_MS);
+  }
+
+  async function recompute() {
+    const space = picture().layout;
+    if (space === 'force') return;
+    try { await api.recomputeGraphLayout({ space }); toast('Recomputing the semantic layout…', 'info'); layouts[space] = { ...(layouts[space] || { space }), status: layouts[space] && layouts[space].status === 'ready' ? 'ready' : 'computing', stale: true }; pollLayout(space); updateLayoutChip(); }
+    catch (e) { toast(`Could not start the layout: ${e.message}`, e.status === 409 ? 'info' : 'error'); }
+  }
+
+  // ── drawing ────────────────────────────────────────────────────────────────
+  function nodeColor(n) {
+    if (n.id === selectedId) return COLORS.selected;
+    if (n.kind === 'hit') return COLORS.hit;
+    if (n.kind === 'folded') return COLORS.folded;
+    if (n.kind === 'neighbor') return COLORS.neighbor;
+    if (n.kind === 'ctx') return COLORS.ctx;
+    return lastAnswer ? (picture().focus === 'shrink' ? COLORS.dust : COLORS.bankDim) : COLORS.bank;
+  }
+  function nodeTip(n) {
+    const parts = [];
+    if (n.kind === 'hit') parts.push(`<b>retrieved #${n.rank}</b>`);
+    else if (n.kind === 'folded' || n.kind === 'neighbor') parts.push(`<b>${n.kind} pointer</b>`);
+    else if (n.kind === 'ctx') parts.push('<b>other connection</b>');
+    const text = n.text || labelFor(bankEnds[n.id]) || String(n.id).slice(0, 8);
+    parts.push(esc(text));
+    if (n.note) parts.push(`<i>${esc(n.note)}</i>`);
+    parts.push(`<span style="opacity:.7">${n.degree || 0} connection${n.degree === 1 ? '' : 's'}</span>`);
+    return `<div class="kbx kbx-graph-tip">${parts.join('<br>')}</div>`;
+  }
+  function linkColor(l) { return l.pointer ? COLORS.folded : (RELATION_COLORS[l.relation] || RELATION_COLORS.connected); }
+
+  async function render() {
+    if (!bankEdges) return;
+    const o = options(); const p = picture();
+    const answer = lastAnswer ? searchGraph(lastAnswer.results, lastAnswer.connections, { context: o.context }) : null;
+    const sc = scene([...bankEdges, ...extraEdges], answer, { focus: p.focus, hideBackfill: p.hideBackfill });
+    sc.nodes.forEach((n) => { if (!n.text && bankEnds[n.id]) n.text = labelFor(bankEnds[n.id]); });
+    // semantic layout: pin to the service's positions when ready, poll while computing
+    let pinned = null;
+    if (p.layout !== 'force') {
+      const body = layouts[p.layout] || await fetchLayout(p.layout);
+      if (body.status === 'ready') pinned = pinPositions(sc.nodes, body.positions, SEM_SCALE);
+      else pinPositions(sc.nodes, null);
+      if (body.status === 'computing' && !pollTimer) pollLayout(p.layout);
+      if (body.status === 'ready' && body.stale && !pollTimer) pollLayout(p.layout);
+    } else {
+      pinPositions(sc.nodes, null);
+      stopPolling();
+    }
+    updateLayoutChip(pinned);
+    if (!sc.nodes.length) {
+      if (fg) fg.graphData({ nodes: [], links: [] });
+      caption.textContent = lastAnswer ? 'no results' : 'no connections yet';
+      showOverlay(h('div', { class: 'kbx-empty' }, h('i', { class: 'bi bi-share' }), h('h4', {}, lastAnswer ? 'Nothing above the threshold' : 'No connections yet'),
+        h('div', {}, lastAnswer ? 'Try another wording or a lower threshold.' : 'Agents add them with report_learning connections; the backfill reads citations and typed metadata.')));
       return;
     }
-    const graph = bankGraph(edges, { ends: bankEnds });
     hideOverlay();
-    // A small bank fits at a high zoom; cap it so dots stay dots.
-    makeCy([...graph.nodes, ...graph.edges], { name: 'preset', fit: true, padding: 40 }, { maxZoom: 2.5 });
-    caption.textContent = `${num(graph.stats.nodes)} entries · ${num(graph.stats.edges)} connections · ${num(graph.stats.components)} constellations${graph.stats.truncated ? ` · first ${num(MAX_BANK_EDGES)} of ${num(edges.total)} edges` : ''}`;
+    if (!fg) return;
+    const sem = p.layout !== 'force' && pinned;
+    fg.cooldownTicks(sem ? 20 : 160).warmupTicks(sem ? 0 : 30);
+    fg.d3Force('charge').strength(sem ? -3 : -40);
+    fg.graphData({ nodes: sc.nodes, links: sc.links });
+    caption.textContent = lastAnswer
+      ? `${sc.stats.hits} retrieved · ${Math.max(0, sc.stats.lit - sc.stats.hits)} pointed at · ${sc.stats.links} edges shown${sc.stats.added ? ` · ${sc.stats.added} without connections yet` : ''}`
+      : `${num(sc.stats.nodes)} entries · ${num(sc.stats.links)} connections${p.hideBackfill && sc.stats.hiddenBackfill ? ` · ${num(sc.stats.hiddenBackfill)} backfill siblings hidden` : ''}${bankEdges.total > MAX_BANK_EDGES ? ` · first ${num(MAX_BANK_EDGES)} of ${num(bankEdges.total)} edges` : ''}`;
+  }
+
+  function updateLayoutChip(pinned) {
+    const p = picture();
+    if (p.layout === 'force') { layoutChip.style.display = 'none'; recomputeBtn.style.display = 'none'; return; }
+    const body = layouts[p.layout];
+    layoutChip.textContent = layoutCaption(body) + (pinned && pinned.missing ? ` · ${pinned.missing} placed beside the answer` : '');
+    layoutChip.style.display = '';
+    recomputeBtn.style.display = body && (body.status === 'ready' || body.status === 'failed') ? '' : 'none';
+  }
+
+  function fitView() {
+    if (!fg) return;
+    const lit = lastAnswer ? fg.graphData().nodes.filter((n) => n.lit) : [];
+    if (lit.length) fg.zoomToFit(600, 80, (n) => n.lit); else fg.zoomToFit(600, 40);
+  }
+
+  function flyTo(n) {
+    if (!fg || n.x === undefined) return;
+    const dist = 110;
+    const r = 1 + dist / (Math.hypot(n.x, n.y, n.z) || 1);
+    fg.cameraPosition({ x: n.x * r, y: n.y * r, z: n.z * r }, n, 700);
+  }
+
+  async function initGraph() {
+    try { await ensureLib(); }
+    catch (e) { showOverlay(h('div', { class: 'kbx-alert danger' }, `3D graph library not available: ${e.message}`)); return false; }
+    try {
+      fg = window.ForceGraph3D()(canvas)
+        .width(canvas.clientWidth || 800).height(canvas.clientHeight || 560)
+        .backgroundColor(COLORS.bg)
+        .nodeVal((n) => n.val || 1).nodeColor(nodeColor).nodeOpacity(0.95)
+        .nodeLabel(nodeTip)
+        .linkColor(linkColor).linkOpacity(0.6).linkWidth((l) => (l.lit ? 1.4 : 0))
+        .linkDirectionalParticles((l) => (l.pointer ? 3 : 0)).linkDirectionalParticleWidth(1.8).linkDirectionalParticleColor(() => COLORS.folded)
+        .onNodeClick((n) => selectNode(n))
+        .onNodeHover((n) => { canvas.style.cursor = n ? 'pointer' : 'default'; })
+        .onEngineStop(() => fitView())
+        .enableNodeDrag(false);
+    } catch (e) {
+      showOverlay(h('div', { class: 'kbx-alert danger' }, `WebGL is needed for the 3D graph: ${e.message}`));
+      fg = null;
+      return false;
+    }
+    if (window.ResizeObserver) new ResizeObserver(() => { if (fg && canvas.clientWidth) fg.width(canvas.clientWidth).height(canvas.clientHeight); }).observe(canvas);
+    return true;
   }
 
   // ── search ─────────────────────────────────────────────────────────────────
@@ -222,15 +294,15 @@ export function createGraphView(ctx) {
     try {
       const data = await api.search(payload);
       const results = resultsOf(data);
-      results.forEach((r) => { bankEnds[r.id] = r; (r.related || []).forEach((p) => { if (!bankEnds[p.id]) bankEnds[p.id] = p; }); });
-      // The results' real connections (one call per result, four at a time).
+      results.forEach((r) => { bankEnds[r.id] = r; (r.related || []).forEach((pt) => { if (!bankEnds[pt.id]) bankEnds[pt.id] = pt; }); });
       const connections = {};
       const queue = results.map((r) => r.id);
       const worker = async () => { while (queue.length) { const id = queue.shift(); try { connections[id] = await api.entryConnections(id); } catch { connections[id] = null; } } };
       await Promise.all(Array.from({ length: Math.min(4, queue.length) }, worker));
-      Object.values(connections).forEach((c) => { if (!c) return; [...(c.outgoing || []), ...(c.incoming || [])].forEach((e) => { if (e.other && e.other.id && !bankEnds[e.other.id]) bankEnds[e.other.id] = e.other; }); });
+      Object.values(connections).forEach((c) => { if (!c) return; [...(c.outgoing || []), ...(c.incoming || [])].forEach((e) => { if (e.other && e.other.id && e.other.kind !== 'playbook_step' && !bankEnds[e.other.id]) bankEnds[e.other.id] = e.other; }); });
       lastAnswer = { payload, data, results, connections };
-      redrawAnswer();
+      renderAnswer(agentView(results, { collapse: Boolean(payload.collapse) }), payload, data);
+      await render();
     } catch (e) {
       mount(answerHost, h('div', { class: 'kbx-alert danger' }, `Search failed: ${e.message}`));
     } finally {
@@ -238,134 +310,75 @@ export function createGraphView(ctx) {
     }
   }
 
-  function redrawAnswer() {
-    if (!lastAnswer) return;
-    const o = options();
-    const view = agentView(lastAnswer.results, { collapse: Boolean(lastAnswer.payload.collapse) });
-    const graph = searchGraph(lastAnswer.results, lastAnswer.connections, { context: o.context });
-    lastAnswer.view = view; lastAnswer.graph = graph;
-    renderAnswer(view, lastAnswer.payload, lastAnswer.data, graph.stats);
-    hideOverlay();
-    if (!graph.nodes.length) {
-      if (cy) { cy.destroy(); cy = null; }
-      caption.textContent = 'no results';
-      showOverlay(h('div', { class: 'kbx-empty' }, h('i', { class: 'bi bi-search' }), h('h4', {}, 'Nothing above the threshold'), h('div', {}, 'Try another wording or a lower threshold.')));
-      return;
-    }
-    if (o.view === 'bank' && bankEdges && bankEdges.length) {
-      paintOnBank(graph);
-    } else {
-      makeCy([...graph.nodes, ...graph.edges], layoutFor(graph));
-    }
-    caption.textContent = `${graph.stats.hits} retrieved · ${graph.stats.pointers} pointed at · ${graph.stats.context} other · ${graph.stats.edges} edges`;
-  }
-
-  /** The answer lit up inside the whole-bank picture: the constellation is
-      redrawn from the cached edges, hits and pointer targets get their classes
-      and labels, entries with no connections are added underneath, the rest
-      dims and the camera fits the lit set. */
-  function paintOnBank(graph) {
-    const bank = bankGraph(bankEdges, { ends: bankEnds });
-    makeCy([...bank.nodes, ...bank.edges], { name: 'preset', fit: false }, { maxZoom: 2.5 });
-    if (!cy) return;
-    const bb = cy.nodes().length ? cy.nodes().boundingBox() : { x1: 0, y1: 0, x2: 0, y2: 0 };
-    const plan = overlayPlan(graph, new Set(cy.nodes().map((n) => n.id())), bb);
-    cy.batch(() => {
-      cy.elements().addClass('dim');
-      plan.mark.forEach((m) => { const n = cy.$id(m.id); n.removeClass('dim'); n.addClass(m.kind); n.data('kind', m.kind); if (m.kind === 'hit') n.data('rank', m.rank); n.data('label', m.label); if (m.text) n.data('text', m.text); });
-      if (plan.added.length) cy.add(plan.added);
-      plan.edges.forEach((e) => {
-        const existing = cy.$id(e.data.id);
-        if (existing.length) { existing.removeClass('dim'); existing.addClass(e.classes || ''); existing.addClass('lit'); return; }
-        if (cy.$id(e.data.source).length && cy.$id(e.data.target).length) cy.add({ data: e.data, classes: `${e.classes || ''} lit` });
-      });
-      // Connections between lit entries that the answer itself did not name still read as context.
-      cy.edges('.dim').forEach((e) => { if (!e.source().hasClass('dim') && !e.target().hasClass('dim')) e.removeClass('dim'); });
-    });
-    const lit = cy.nodes().filter((n) => !n.hasClass('dim'));
-    if (lit.length) cy.fit(lit.closedNeighborhood(), 70); else cy.fit(undefined, 40);
-    if (plan.orphanCount) toast(`${plan.orphanCount} retrieved entr${plan.orphanCount === 1 ? 'y has' : 'ies have'} no connections yet; shown under the constellations`, 'info');
-  }
-
-  function renderAnswer(view, payload, raw, stats) {
-    const o = options();
+  function renderAnswer(view, payload, raw) {
     const head = h('div', { class: 'kbx-graph-answer-head' },
       h('div', {}, h('b', {}, 'query_knowledge_bank'), ` · k=${payload.k} · collapse ${payload.collapse ? 'on' : 'off'}${payload.collapse ? ` · ${payload.collapse.max_neighbors} neighbors/result` : ''}`),
       view.collapse ? h('div', { class: 'kbx-muted', dataset: { role: 'graph-collapse-summary' } }, `collapse: ${view.collapse.groups} group${view.collapse.groups === 1 ? '' : 's'}, ${view.collapse.folded} folded, ${view.collapse.neighbors} neighbor${view.collapse.neighbors === 1 ? '' : 's'}`) : h('div', { class: 'kbx-muted' }, 'flat ranking (no pointers)'));
     const list = h('div', { class: 'kbx-graph-answer', dataset: { role: 'graph-results' } });
     if (!view.results.length) list.append(h('div', { class: 'kbx-hint' }, 'No results.'));
     view.results.forEach((r) => {
-      const ptrs = (r.related || []).map((p) => h('div', { class: `kbx-ptr ${p.kind === 'neighbor' ? 'neighbor' : 'folded'}`, dataset: { entryId: p.id }, title: p.id, onClick: (e) => { e.stopPropagation(); focusNode(p.id); } }, pointerLine(p)));
+      const ptrs = (r.related || []).map((pt) => h('div', { class: `kbx-ptr ${pt.kind === 'neighbor' ? 'neighbor' : 'folded'}`, dataset: { entryId: pt.id }, title: pt.id, onClick: (e) => { e.stopPropagation(); focusId(pt.id); } }, pointerLine(pt)));
       if (r.related_truncated) ptrs.push(h('div', { class: 'kbx-ptr muted' }, `+${r.related_truncated} more connected entries not listed`));
-      list.append(h('div', { class: 'kbx-graph-result', dataset: { entryId: r.id, role: 'graph-result' }, onClick: () => focusNode(r.id) },
+      list.append(h('div', { class: 'kbx-graph-result', dataset: { entryId: r.id, role: 'graph-result' }, onClick: () => focusId(r.id) },
         h('div', { class: 'kbx-row', style: { gap: '6px', alignItems: 'baseline' } }, h('span', { class: 'kbx-chip' }, `#${r.rank}`), h('span', { class: 'kbx-mono kbx-muted', style: { fontSize: '11px' } }, r.id.slice(0, 8)), h('span', { class: 'kbx-muted', style: { fontSize: '11px' } }, `score ${r.score}`)),
         h('div', { class: 'kbx-graph-result-text' }, r.summary || r.useful_for || r.content.slice(0, 200)),
         ptrs.length ? h('div', { class: 'kbx-graph-ptrs' }, ...ptrs) : null));
     });
     const rawPre = h('pre', { class: 'kbx-graph-raw', style: { display: 'none' }, dataset: { role: 'graph-raw' } }, JSON.stringify({ request: payload, response: raw }, null, 2));
     const rawBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { role: 'graph-raw-toggle' }, onClick: () => { const on = rawPre.style.display === 'none'; rawPre.style.display = on ? 'block' : 'none'; rawBtn.textContent = on ? 'Hide raw JSON' : 'Raw JSON'; } }, 'Raw JSON');
-    mount(answerHost, head, list, h('div', { class: 'kbx-row', style: { gap: '6px', marginTop: '6px' } }, rawBtn, h('span', { class: 'kbx-muted', style: { fontSize: '12px' } }, `${o.view === 'bank' ? 'lit up in the bank' : 'answer only'} · ${o.context ? `${stats.context} other connections drawn` : 'other connections hidden'}`)), rawPre);
+    mount(answerHost, head, list, h('div', { class: 'kbx-row', style: { gap: '6px', marginTop: '6px' } }, rawBtn), rawPre);
   }
 
-  function focusNode(id) {
-    if (!cy) return;
-    const n = cy.$id(id);
-    if (!n.length) return;
-    cy.nodes().unselect(); n.select();
-    cy.animate({ center: { eles: n }, zoom: Math.max(cy.zoom(), 1) }, { duration: 250 });
-    selectNode(n);
+  function focusId(id) {
+    if (!fg) return;
+    const n = fg.graphData().nodes.find((x) => x.id === id);
+    if (n) selectNode(n);
   }
 
   async function selectNode(n) {
-    const d = n.data();
-    cy.nodes().unselect(); n.select();
-    cy.edges().removeClass('lit'); n.connectedEdges().addClass('lit');
-    let entry = bankEnds[d.id];
+    selectedId = n.id;
+    if (fg) fg.nodeColor(nodeColor); // re-evaluate colours (selected ring)
+    flyTo(n);
+    let entry = bankEnds[n.id];
     if (!entry || !(entry.content || entry.summary || entry.useful_for || entry.text)) {
       mount(selectedHost, skeleton('Loading entry…'));
-      try { entry = await api.getEntry(d.id); bankEnds[d.id] = entry; n.data('label', d.kind === 'bank' ? labelFor(entry) : n.data('label')); n.data('text', labelFor(entry)); }
+      try { entry = await api.getEntry(n.id); bankEnds[n.id] = entry; n.text = labelFor(entry); }
       catch (e) { mount(selectedHost, h('div', { class: 'kbx-alert danger' }, `Could not load the entry: ${e.message}`)); return; }
     }
-    const conns = n.connectedEdges().map((e) => e.data());
+    const links = fg ? fg.graphData().links.filter((l) => (l.source.id || l.source) === n.id || (l.target.id || l.target) === n.id) : [];
+    const chip = n.kind === 'hit' ? `retrieved #${n.rank}` : n.kind === 'bank' ? `${n.degree} connection${n.degree === 1 ? '' : 's'}` : n.kind === 'ctx' ? 'other connection' : `${n.kind} pointer`;
     mount(selectedHost,
-      h('div', { class: 'kbx-row', style: { gap: '6px', alignItems: 'center' } }, h('span', { class: `kbx-chip ${d.kind === 'hit' ? '' : 'muted'}` }, d.kind === 'hit' ? `retrieved #${d.rank}` : d.kind === 'bank' ? `${d.degree} connections` : d.kind), h('span', { class: 'kbx-mono kbx-muted', style: { fontSize: '11px' } }, String(d.id).slice(0, 8))),
+      h('div', { class: 'kbx-row', style: { gap: '6px', alignItems: 'center' } }, h('span', { class: `kbx-chip ${n.kind === 'hit' ? '' : 'muted'}` }, chip), h('span', { class: 'kbx-mono kbx-muted', style: { fontSize: '11px' } }, String(n.id).slice(0, 8))),
       h('div', { class: 'kbx-graph-selected-text' }, labelFor(entry)),
       entry.useful_for && labelFor(entry) !== entry.useful_for ? h('div', { class: 'kbx-muted', style: { fontSize: '12px', marginTop: '4px' } }, entry.useful_for) : null,
       h('div', { class: 'kbx-row', style: { gap: '6px', marginTop: '8px' } },
-        h('button', { class: 'kbx-btn kbx-btn-sm kbx-btn-primary', type: 'button', dataset: { role: 'graph-open-entry' }, onClick: () => openEntryDetail(ctx, d.id) }, 'Open entry'),
-        h('button', { class: 'kbx-btn kbx-btn-sm kbx-btn-ghost', type: 'button', dataset: { role: 'graph-expand' }, onClick: () => expandNode(d.id) }, 'Show its connections')),
-      conns.length ? h('div', { class: 'kbx-graph-ptrs', style: { marginTop: '8px' } }, ...conns.map((e) => h('div', { class: `kbx-ptr ${e.source_kind === 'pointer' || String(e.id).startsWith('ptr:') ? 'folded' : 'muted'}` }, `${String(e.relation || '').replace(/_/g, ' ')} ${e.source === d.id ? '→' : '←'} ${labelFor(bankEnds[e.source === d.id ? e.target : e.source]) || String(e.source === d.id ? e.target : e.source).slice(0, 8)}${e.note ? ` — ${e.note}` : ''}`))) : h('div', { class: 'kbx-hint', style: { marginTop: '8px' } }, 'No drawn connections.'));
+        h('button', { class: 'kbx-btn kbx-btn-sm kbx-btn-primary', type: 'button', dataset: { role: 'graph-open-entry' }, onClick: () => openEntryDetail(ctx, n.id) }, 'Open entry'),
+        h('button', { class: 'kbx-btn kbx-btn-sm kbx-btn-ghost', type: 'button', dataset: { role: 'graph-expand' }, onClick: () => expandNode(n.id) }, 'Show its connections')),
+      links.length ? h('div', { class: 'kbx-graph-ptrs', style: { marginTop: '8px' } }, ...links.map((l) => {
+        const src = l.source.id || l.source; const tgt = l.target.id || l.target; const other = src === n.id ? tgt : src;
+        return h('div', { class: `kbx-ptr ${l.pointer ? 'folded' : 'muted'}` }, `${String(l.relation || '').replace(/_/g, ' ')} ${src === n.id ? '→' : '←'} ${labelFor(bankEnds[other]) || String(other).slice(0, 8)}${l.note ? ` — ${l.note}` : ''}`);
+      })) : h('div', { class: 'kbx-hint', style: { marginTop: '8px' } }, 'No drawn connections.'));
   }
 
-  /** Add one node's full neighbourhood to the current picture (one hop). */
+  /** Reveal one entry's whole neighbourhood (one hop), whatever the focus mode hides. */
   async function expandNode(id) {
-    if (!cy) return;
     let conns;
     try { conns = await api.entryConnections(id); } catch (e) { toast(`Could not load connections: ${e.message}`, 'error'); return; }
-    const added = [];
+    const known = new Set([...(bankEdges || []), ...extraEdges].map((e) => e.id));
+    let added = 0;
     [...(conns.outgoing || []), ...(conns.incoming || [])].forEach((e) => {
-      const other = e.other || {};
-      if (other.id && !bankEnds[other.id]) bankEnds[other.id] = other;
-      if (other.id && !cy.$id(other.id).length) {
-        added.push({ data: { id: other.id, label: labelFor(other), kind: 'ctx', text: labelFor(other), relation: e.edge_type }, classes: 'ctx' });
-      }
-      if (!cy.$id(e.id).length && e.from_entry_id && e.to_entry_id) {
-        added.push({ data: { id: e.id, source: e.from_entry_id, target: e.to_entry_id, relation: e.edge_type, label: String(e.edge_type || '').replace(/_/g, ' '), note: e.note || '', source_kind: e.source || 'author' }, classes: 'ctx' });
-      }
+      if (!e.to_entry_id || (e.other && e.other.kind === 'playbook_step')) return;
+      if (e.other && e.other.id && !bankEnds[e.other.id]) bankEnds[e.other.id] = e.other;
+      if (!known.has(e.id)) { extraEdges.push({ ...e, source: e.source === 'pointer' ? 'author' : e.source }); known.add(e.id); added += 1; }
     });
-    if (!added.length) { toast('Every connection of this entry is already drawn', 'info'); return; }
-    const inBank = cy.nodes('.bank').length > 0;
-    const els = cy.add(added.filter((a) => !a.data.source || (cy.$id(a.data.source).length || added.some((b) => b.data.id === a.data.source)) && (cy.$id(a.data.target).length || added.some((b) => b.data.id === a.data.target))));
-    if (inBank) {
-      // Keep the constellation still: place new nodes on a small ring around the expanded one.
-      const c = cy.$id(id).position();
-      const newNodes = els.nodes();
-      newNodes.forEach((n, i) => { const a = (2 * Math.PI * i) / newNodes.length; n.position({ x: c.x + 46 * Math.cos(a), y: c.y + 46 * Math.sin(a) }); });
-      newNodes.addClass('bank');
-    } else {
-      cy.layout(layoutFor({ nodes: cy.nodes().toArray() })).run();
+    // mark the neighbourhood as lit so a shrink/only focus shows it
+    if (lastAnswer) {
+      const extra = [...(conns.outgoing || []), ...(conns.incoming || [])].map((e) => e.other && e.other.id).filter(Boolean);
+      lastAnswer.results = lastAnswer.results.map((r) => (r.id === id ? { ...r, related: [...(r.related || []), ...extra.filter((x) => !(r.related || []).some((pt) => pt.id === x)).map((x) => ({ id: x, relation: 'connected', direction: 'outgoing', kind: 'neighbor', text: labelFor(bankEnds[x]) }))] } : r));
+      if (!lastAnswer.results.some((r) => r.id === id)) lastAnswer.results = [...lastAnswer.results, { id, content: '', useful_for: labelFor(bankEnds[id]), combined_score: 0, metadata: {}, related: extra.map((x) => ({ id: x, relation: 'connected', direction: 'outgoing', kind: 'neighbor', text: labelFor(bankEnds[x]) })) }];
     }
-    toast(`${els.nodes().length} entr${els.nodes().length === 1 ? 'y' : 'ies'} added`, 'success');
+    await render();
+    toast(added ? `${added} connection${added === 1 ? '' : 's'} revealed` : 'Every connection of this entry is already drawn', 'info');
   }
 
   // ── lifecycle ──────────────────────────────────────────────────────────────
@@ -373,9 +386,16 @@ export function createGraphView(ctx) {
     if (loaded) return;
     loaded = true;
     loadSettings();
-    await drawBank();
+    clear(answerHost);
+    answerHost.append(h('div', { class: 'kbx-hint' }, 'Type a query and press Search to see what an agent would get back for it, lit up inside the bank.'));
+    showOverlay(skeleton('Loading the bank’s connections…'));
+    const ok = await initGraph();
+    try { await fetchBankEdges(); }
+    catch (e) { showOverlay(h('div', { class: 'kbx-alert danger' }, `Could not load connections: ${e.message}`)); return; }
+    if (!ok) return;
+    await render();
   }
-  function onShow() { if (cy) cy.resize(); }
+  function onShow() { if (fg && canvas.clientWidth) fg.width(canvas.clientWidth).height(canvas.clientHeight); }
 
   return { el, load, onShow };
 }

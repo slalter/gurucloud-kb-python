@@ -1049,6 +1049,21 @@ edit the harness, they file a card.
 
 ## Changelog
 
+### 0.11.0
+
+- **Explorer Graph tab in 3D.** The tab now draws the bank with a three.js
+  force graph: the answer to a query lights up inside the whole bank and the
+  rest shrinks (or hides, or only dims), particles travel along the edges the
+  agent was told about, and any node flies into view on click. A Layout
+  control places entries by meaning instead of by edges, using a 3-axis
+  projection of their embeddings computed by the service.
+- **`kb.graph_layout(space=...)`** and **`kb.recompute_graph_layout(space=...)`**
+  (`GET/POST /banks/{kb}/graph/layout[/recompute]`): positions in [-1, 1] for
+  the connected entries in the `content`, `useful_for` or `both` embedding
+  space (UMAP when installed, else t-SNE over PCA, else PCA; `run.method`
+  says which). The first call answers `computing` and starts the projection;
+  a `stale` layout is served while it refreshes.
+
 ### 0.10.0
 
 - **Per-bank edge relations.** `kb.edge_relations()` returns the bank's

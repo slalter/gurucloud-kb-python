@@ -49,7 +49,9 @@ from gurucloud_kb.types import (
     EdgeRelationVocabulary,
     EdgeType,
     EntryConnections,
+    GraphLayout,
     GraphNeighborhood,
+    StartLayout,
     JudgePairsResult,
     MetadataFacets,
     SimilarPairsResult,
@@ -845,6 +847,25 @@ class KnowledgeBank:
     def connection_stats(self) -> EdgeStats:
         """Counts by type and by source, and how many entries are connected."""
         return self._http.get(self._path("/edge-stats"))
+
+    def graph_layout(self, *, space: str = "content") -> GraphLayout:
+        """Where the connected entries sit in semantic space: a 3-axis
+        projection (UMAP, t-SNE or PCA, see ``run.method``) of their
+        embeddings for ``space`` = ``content``, ``useful_for`` or ``both``::
+
+            layout = kb.graph_layout(space="content")
+            if layout["status"] == "ready":
+                x, y, z = layout["positions"][entry_id]
+
+        The first call on a bank answers ``computing`` and starts the
+        projection in the background; poll until ``ready``. A ``stale`` layout
+        is still served while a refresh runs.
+        """
+        return self._http.get(self._path("/graph/layout"), params={"space": space})
+
+    def recompute_graph_layout(self, *, space: str = "content") -> StartLayout:
+        """Start a fresh projection for ``space`` (HTTP 409 while one is already running)."""
+        return self._http.post(self._path("/graph/layout/recompute"), params={"space": space})
 
     def graph(self, root: str, *, depth: int = 1, limit: int = 150) -> GraphNeighborhood:
         """The neighbourhood of ``root`` up to ``depth`` hops (1-3) in either

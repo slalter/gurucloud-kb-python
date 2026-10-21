@@ -175,3 +175,49 @@ class TestEdgeRelations:
         from gurucloud_kb import BUILTIN_EDGE_TYPES, BuiltinEdgeType
 
         assert BUILTIN_EDGE_TYPES == get_args(BuiltinEdgeType)
+
+
+class TestGraphLayoutSdk:
+    """``kb.graph_layout`` / ``kb.recompute_graph_layout`` over the SDK contract."""
+
+    @respx.mock
+    def test_graph_layout_passes_the_space_and_unwraps_positions(self):
+        route = respx.get(f"{API_PREFIX}/banks/kb-1/graph/layout").mock(return_value=httpx.Response(200, json={"data": {
+            "space": "both", "status": "ready", "stale": False, "connected_entries": 2,
+            "run": {"id": "r1", "space": "both", "status": "ready", "method": "tsne", "entry_count": 2},
+            "positions": {"aaaa": [0.1, -0.2, 0.3], "bbbb": [1.0, 0.0, -1.0]},
+        }}))
+        kb = _kb()
+        layout: Any = kb.graph_layout(space="both")
+        assert route.called and route.calls.last.request.url.params["space"] == "both"
+        assert layout["status"] == "ready" and layout["positions"]["bbbb"] == [1.0, 0.0, -1.0] and layout["run"]["method"] == "tsne"
+
+    @respx.mock
+    def test_graph_layout_defaults_to_content_and_reports_computing(self):
+        route = respx.get(f"{API_PREFIX}/banks/kb-1/graph/layout").mock(return_value=httpx.Response(200, json={"data": {
+            "space": "content", "status": "computing", "connected_entries": 40, "computing": {"id": "r2", "space": "content", "status": "computing"}, "positions": {},
+        }}))
+        layout: Any = _kb().graph_layout()
+        assert route.calls.last.request.url.params["space"] == "content"
+        assert layout["status"] == "computing" and layout["positions"] == {} and layout["computing"]["id"] == "r2"
+
+    @respx.mock
+    def test_recompute_posts_and_a_409_surfaces_as_an_error(self):
+        respx.post(f"{API_PREFIX}/banks/kb-1/graph/layout/recompute").mock(return_value=httpx.Response(202, json={"data": {"started": True, "run": {"id": "r3", "space": "content", "status": "computing"}}}))
+        out: Any = _kb().recompute_graph_layout(space="content")
+        assert out["started"] is True and out["run"]["id"] == "r3"
+        respx.post(f"{API_PREFIX}/banks/kb-1/graph/layout/recompute").mock(return_value=httpx.Response(409, json={"error": {"code": "layout_in_flight", "message": "a layout for this space is already being computed"}}))
+        with pytest.raises(Exception) as exc:
+            _kb().recompute_graph_layout(space="content")
+        assert "already being computed" in str(exc.value) or "409" in str(exc.value)
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_async_graph_layout(self):
+        respx.get(f"{API_PREFIX}/banks/kb-1").mock(return_value=httpx.Response(200, json={"data": KB_INFO}))
+        respx.get(f"{API_PREFIX}/banks/kb-1/graph/layout").mock(return_value=httpx.Response(200, json={"data": {"space": "useful_for", "status": "empty", "positions": {}}}))
+        async with AsyncGuruCloudClient(api_key=API_KEY, base_url=BASE_URL) as client:
+            kb = await client.get_kb("kb-1")
+            layout: Any = await kb.graph_layout(space="useful_for")
+        assert layout["status"] == "empty"
+

@@ -118,6 +118,8 @@ export function createApi(kbId, base, opts = {}) {
     edgeStats: () => req('GET', '/edge-stats'),
     edgeRelations: () => req('GET', '/edge-relations'),
     graph: (params) => req('GET', '/graph', { params }),
+    graphLayout: (params) => req('GET', '/graph/layout', { params }),
+    recomputeGraphLayout: (params) => req('POST', '/graph/layout/recompute', { params }),
     backfillEdges: (payload) => req('POST', '/edges/backfill', { body: payload }),
     // assertions
     listAssertions: (params) => req('GET', '/assertions', { params }),

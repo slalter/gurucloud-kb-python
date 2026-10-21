@@ -11,6 +11,10 @@
      • the BANK picture ("constellation"): every edge in the bank, laid out
        component by component with no overlapping nodes, deterministic.
 
+   Edges can also target a playbook step (to_entry_id null, to_playbook_slug +
+   to_step_key); the pictures here are entry-to-entry, so those edges are
+   counted and skipped.
+
    Exported for graph.js (the renderer) and for the Node suite
    tests/test_kb_explorer_graph_model.js. */
 
@@ -152,6 +156,7 @@ export function searchGraph(results, connectionsById = {}, { context = false } =
     if (!conns || !nodes.has(rid)) return;
     [...(conns.outgoing || []), ...(conns.incoming || [])].forEach((e) => {
       const other = e.other || {};
+      if (other.kind === 'playbook_step' || (!e.to_entry_id && e.to_playbook_slug)) return; // entry-to-step edges are not drawn here
       const otherId = other.id || (e.from_entry_id === rid ? e.to_entry_id : e.from_entry_id);
       if (!otherId) return;
       const isPointer = pointerPairs.has(pairKey(rid, otherId));
@@ -243,9 +248,10 @@ export function componentLayout(members) {
     no two constellations touch. `ends` (optional {id: {summary|useful_for}})
     labels the nodes it knows. */
 export function bankGraph(edges, { maxEdges = MAX_BANK_EDGES, ends = {} } = {}) {
-  const all = edges || [];
-  const truncated = all.length > maxEdges;
-  const used = truncated ? all.slice(0, maxEdges) : all;
+  const entryEdges = (edges || []).filter((e) => e && e.from_entry_id && e.to_entry_id);
+  const stepEdges = (edges || []).length - entryEdges.length;
+  const truncated = entryEdges.length > maxEdges;
+  const used = truncated ? entryEdges.slice(0, maxEdges) : entryEdges;
   const degree = new Map();
   used.forEach((e) => { degree.set(e.from_entry_id, (degree.get(e.from_entry_id) || 0) + 1); degree.set(e.to_entry_id, (degree.get(e.to_entry_id) || 0) + 1); });
   const ids = [...degree.keys()].sort();
@@ -267,7 +273,7 @@ export function bankGraph(edges, { maxEdges = MAX_BANK_EDGES, ends = {} } = {}) 
   return {
     nodes,
     edges: edgeEls,
-    stats: { nodes: nodes.length, edges: edgeEls.length, components: groups.size, largest: sizes.length ? Math.max(...sizes) : 0, truncated },
+    stats: { nodes: nodes.length, edges: edgeEls.length, components: groups.size, largest: sizes.length ? Math.max(...sizes) : 0, truncated, stepEdges },
   };
 }
 
@@ -299,6 +305,104 @@ export function overlayPlan(answer, bankIds, bbox) {
   const edges = (answer.edges || []).filter((e) => present.has(e.data.source) && present.has(e.data.target));
   const litIds = [...mark.map((m) => m.id), ...added.map((a) => a.data.id)];
   return { mark, added, edges, litIds, orphanCount: orphans.length };
+}
+
+export const FOCUS_MODES = ['shrink', 'only', 'dim'];
+export const LAYOUT_MODES = ['force', 'content', 'useful_for', 'both'];
+
+/** Normalise the two picture knobs (defaults: shrink the rest, force layout). */
+export function pictureOptions(o = {}) {
+  return {
+    focus: FOCUS_MODES.includes(o.focus) ? o.focus : 'shrink',
+    layout: LAYOUT_MODES.includes(o.layout) ? o.layout : 'force',
+    hideBackfill: o.hideBackfill === undefined ? true : Boolean(o.hideBackfill),
+  };
+}
+
+/** The 3D scene for the Graph tab: the bank's entry-to-entry edges (optionally
+    without the note-less backfill_metadata siblings) with the answer painted
+    on. Every node carries `kind` (hit | folded | neighbor | ctx | bank), `lit`,
+    `rank`, `val` (sphere volume) and the colour role; every link `lit` and
+    `relation`. `focus`: 'dim' keeps everything, 'shrink' makes unlit nodes
+    dust and drops unlit links, 'only' removes them. Retrieved or pointed-at
+    entries the bank has no edges for are added so the answer is complete. */
+export function scene(bankEdges, answer, { focus = 'shrink', hideBackfill = true } = {}) {
+  const edges = (bankEdges || []).filter((e) => e && e.from_entry_id && e.to_entry_id && !(hideBackfill && e.source === 'backfill_metadata'));
+  const degree = new Map();
+  edges.forEach((e) => { degree.set(e.from_entry_id, (degree.get(e.from_entry_id) || 0) + 1); degree.set(e.to_entry_id, (degree.get(e.to_entry_id) || 0) + 1); });
+  const nodes = new Map();
+  [...degree.keys()].sort().forEach((id) => nodes.set(id, { id, kind: 'bank', lit: false, rank: 0, degree: degree.get(id) || 0, label: '', text: '' }));
+  const links = edges.map((e) => ({ id: e.id, source: e.from_entry_id, target: e.to_entry_id, relation: e.edge_type, source_kind: e.source || 'author', note: e.note || '', lit: false }));
+  const litIds = new Set();
+  if (answer) {
+    (answer.nodes || []).forEach((n) => {
+      const kind = n.data.kind === 'hit' ? 'hit' : n.data.kind;
+      const cur = nodes.get(n.data.id) || { id: n.data.id, degree: 0 };
+      nodes.set(n.data.id, { ...cur, kind, lit: kind !== 'ctx', rank: n.data.rank || 0, label: n.data.label || '', text: n.data.text || '', note: n.data.note || '', added: !degree.has(n.data.id) });
+      if (kind !== 'ctx') litIds.add(n.data.id);
+    });
+    const have = new Set(links.map((l) => l.id));
+    (answer.edges || []).forEach((e) => {
+      if (!nodes.has(e.data.source) || !nodes.has(e.data.target)) return;
+      const existing = links.find((l) => l.id === e.data.id) || links.find((l) => (l.source === e.data.source && l.target === e.data.target) || (l.source === e.data.target && l.target === e.data.source));
+      if (existing) { existing.lit = litIds.has(existing.source) && litIds.has(existing.target); existing.pointer = e.classes.includes('pointer'); return; }
+      if (have.has(e.data.id)) return;
+      have.add(e.data.id);
+      links.push({ id: e.data.id, source: e.data.source, target: e.data.target, relation: e.data.relation, source_kind: e.data.source_kind || 'pointer', note: e.data.note || '', lit: litIds.has(e.data.source) && litIds.has(e.data.target), pointer: e.classes.includes('pointer') });
+    });
+    links.forEach((l) => { if (litIds.has(l.source) && litIds.has(l.target)) l.lit = true; });
+  }
+  let nodeList = [...nodes.values()];
+  let linkList = links;
+  if (answer && focus === 'only') {
+    nodeList = nodeList.filter((n) => n.lit);
+    const keep = new Set(nodeList.map((n) => n.id));
+    linkList = links.filter((l) => keep.has(l.source) && keep.has(l.target));
+  } else if (answer && focus === 'shrink') {
+    linkList = links.filter((l) => l.lit);
+  }
+  nodeList.forEach((n) => {
+    const base = 1 + Math.sqrt(n.degree || 0);
+    n.val = answer && !n.lit ? (focus === 'shrink' ? 0.15 : Math.max(0.4, base * 0.5)) : (n.kind === 'hit' ? base * 2.6 + 4 : n.lit ? base * 1.6 + 2 : base);
+  });
+  return {
+    nodes: nodeList,
+    links: linkList,
+    stats: { nodes: nodeList.length, links: linkList.length, lit: litIds.size, hits: nodeList.filter((n) => n.kind === 'hit').length, added: nodeList.filter((n) => n.added).length, hiddenBackfill: (bankEdges || []).filter((e) => e && e.source === 'backfill_metadata').length },
+  };
+}
+
+/** Pin nodes to semantic positions (the service's GET /graph/layout
+    `positions`, each in [-1, 1]) scaled by `scale`; nodes without a position
+    sit beside the centroid of the lit ones (or the origin). Returns how many
+    were pinned and how many had no position. Clears pins when `positions`
+    is null (force layout). */
+export function pinPositions(nodes, positions, scale = 420) {
+  if (!positions) { nodes.forEach((n) => { delete n.fx; delete n.fy; delete n.fz; }); return { pinned: 0, missing: 0 }; }
+  const placed = [];
+  const missing = [];
+  nodes.forEach((n) => {
+    const p = positions[n.id];
+    if (p && p.length >= 3) { n.fx = p[0] * scale; n.fy = p[1] * scale; n.fz = p[2] * scale; n.x = n.fx; n.y = n.fy; n.z = n.fz; if (n.lit) placed.push(n); }
+    else missing.push(n);
+  });
+  const c = placed.length ? { x: placed.reduce((a, n) => a + n.fx, 0) / placed.length, y: placed.reduce((a, n) => a + n.fy, 0) / placed.length, z: placed.reduce((a, n) => a + n.fz, 0) / placed.length } : { x: 0, y: 0, z: 0 };
+  missing.forEach((n, i) => { const a = i * 2.4; n.fx = c.x + 28 * Math.cos(a); n.fy = c.y + 28 * Math.sin(a); n.fz = c.z + (i % 2 ? 18 : -18); n.x = n.fx; n.y = n.fy; n.z = n.fz; });
+  return { pinned: placed.length + (nodes.length - missing.length - placed.length), missing: missing.length };
+}
+
+/** What the layout chip says for a GET /graph/layout body. */
+export function layoutCaption(body) {
+  if (!body) return 'layout: force';
+  const names = { umap: 'UMAP', tsne: 't-SNE', pca: 'PCA' };
+  if (body.status === 'ready') {
+    const m = body.run && names[body.run.method] ? names[body.run.method] : 'projection';
+    return `semantic (${m} of ${body.space} embeddings, ${body.run ? body.run.entry_count : 0} entries${body.stale ? ', refreshing' : ''})`;
+  }
+  if (body.status === 'computing') return 'semantic layout: computing…';
+  if (body.status === 'empty') return 'semantic layout: no connections yet';
+  if (body.status === 'failed') return `semantic layout failed: ${body.reason || 'see run'}`;
+  return `semantic layout unavailable${body.reason ? `: ${body.reason}` : ''}`;
 }
 
 /** Pages for GET /edges: the service caps limit at 500 (MAX_LIST_LIMIT). */
