@@ -2,13 +2,29 @@
 
 from __future__ import annotations
 
+import time
+
 from datetime import datetime
-from typing import Any, Literal, Mapping, Optional, Sequence
+from typing import Any, Callable, Literal, Mapping, Optional, Sequence
 
 from gurucloud_kb._async_http import AsyncHTTPClient
 from gurucloud_kb import _playbooks as _pb
 from gurucloud_kb._entries import build_entry_update
 from gurucloud_kb._playbooks import qs as _qs
+from gurucloud_kb._ask import (
+    TOOL_READ as _ASK_READ,
+    TOOL_SEARCH as _ASK_SEARCH,
+    TOOL_WALK as _ASK_WALK,
+    continue_body as _ask_continue_body,
+    entry_id_of as _ask_entry_id_of,
+    entry_output as _ask_entry_output,
+    search_k as _ask_search_k,
+    search_output as _ask_search_output,
+    start_body as _ask_start_body,
+    tool_output_item as _ask_tool_output_item,
+    walk_output as _ask_walk_output,
+    walk_params as _ask_walk_params,
+)
 from gurucloud_kb._search import (
     apply_collapse,
     build_expanded_search,
@@ -52,6 +68,11 @@ from gurucloud_kb.types import (
     GraphLayout,
     GraphNeighborhood,
     StartLayout,
+    AskConfig,
+    AskRun,
+    AskRunDetail,
+    AskRunList,
+    AskStep,
     JudgePairsResult,
     MetadataFacets,
     SimilarPairsResult,
@@ -221,6 +242,9 @@ class AsyncKnowledgeBank:
         updated_before: str | datetime | None = None,
         event_after: str | datetime | None = None,
         event_before: str | datetime | None = None,
+        metadata_date_field: str | None = None,
+        metadata_date_after: str | datetime | None = None,
+        metadata_date_before: str | datetime | None = None,
     ) -> list[EntryResult]:
         """List entries, newest first, optionally narrowed by hard filters.
 
@@ -243,6 +267,13 @@ class AsyncKnowledgeBank:
             source: Exact match on the entry's ``source``.
             created_after, created_before, updated_after, updated_before,
             event_after, event_before: ISO-8601 or ``datetime`` bounds (UTC).
+            metadata_date_field, metadata_date_after, metadata_date_before:
+                Range on an ISO-8601 timestamp YOU keep in entry metadata
+                (``metadata_date_field="observed_at"``, a dotted path for a
+                nested key), for a backfilled corpus whose ``created_at`` is
+                only the import date. The field needs at least one bound;
+                an entry whose value is missing or not a timestamp is out of
+                the window.
         """
         return await self._http.get(
             self._path("/entries"),
@@ -257,6 +288,9 @@ class AsyncKnowledgeBank:
                 updated_before=updated_before,
                 event_after=event_after,
                 event_before=event_before,
+                metadata_date_field=metadata_date_field,
+                metadata_date_after=metadata_date_after,
+                metadata_date_before=metadata_date_before,
             ),
         )
 
@@ -380,6 +414,9 @@ class AsyncKnowledgeBank:
         updated_before: str | datetime | None = None,
         event_after: str | datetime | None = None,
         event_before: str | datetime | None = None,
+        metadata_date_field: str | None = None,
+        metadata_date_after: str | datetime | None = None,
+        metadata_date_before: str | datetime | None = None,
         collapse: bool | Mapping[str, Any] | None = None,
     ) -> list[SearchResult]:
         """Semantic search across the KB.
@@ -422,6 +459,11 @@ class AsyncKnowledgeBank:
             event_after, event_before:
                 Like the above, but filter on the caller-supplied ``event_at``
                 (when the event/observation occurred) instead of ingest time.
+            metadata_date_field, metadata_date_after, metadata_date_before:
+                Range on an ISO-8601 timestamp YOU keep in entry metadata
+                (``metadata_date_field="observed_at"``), for a backfilled
+                corpus whose ``created_at`` is only the import date. For a
+                dict query set the same keys inside it.
             collapse: Fold results that are connected to each other (see
                 :meth:`connect`) into one representative each, with
                 ``related`` pointers ``{id, relation, direction, via,
@@ -447,6 +489,9 @@ class AsyncKnowledgeBank:
                 updated_before=updated_before,
                 event_after=event_after,
                 event_before=event_before,
+                metadata_date_field=metadata_date_field,
+                metadata_date_after=metadata_date_after,
+                metadata_date_before=metadata_date_before,
                 collapse=collapse,
             )
         else:
@@ -581,6 +626,7 @@ class AsyncKnowledgeBank:
         metric: str = "cosine",
         similarity_threshold: float = 0.85,
         search: SearchRequest | None = None,
+        scope: Mapping[str, Any] | None = None,
         scope_limit: int = 2000,
         include_members: bool = True,
         max_members_per_cluster: int = 10,
@@ -595,7 +641,11 @@ class AsyncKnowledgeBank:
         each field is grouped independently — embedding dimensions by vector
         similarity, other fields (metadata keys, ``source``, ``text_only``
         dimensions) by fuzzy string match — and ``search`` scopes which entries
-        are clustered. ``max_cluster_size`` / ``max_cluster_fraction`` cap how
+        are clustered, or ``scope`` (the :meth:`list_entries` hard filters,
+        including ``metadata_date_field`` + ``metadata_date_after`` /
+        ``metadata_date_before``) picks the newest ``scope_limit`` entries
+        passing them without a query (mutually exclusive with ``search``).
+        ``max_cluster_size`` / ``max_cluster_fraction`` cap how
         many entries any one cluster may hold (absolute count / share of the
         scope; the stricter wins) — oversized vector clusters are recursively
         split server-side. ``outlier_strategy`` controls noise handling on
@@ -643,6 +693,8 @@ class AsyncKnowledgeBank:
             body["member_sample"] = member_sample
         if search is not None:
             body["search"] = normalize_search_request(search)
+        if scope:
+            body["scope"] = normalize_pair_scope(scope)
         return await self._http.post(self._path("/cluster"), json=body)
 
     # ── similar pairs (beta) ─────────────────────────────────────
@@ -750,6 +802,89 @@ class AsyncKnowledgeBank:
         """
         return await self._http.get(self._path("/graph"), params={"root": root, "depth": depth, "limit": limit})
 
+    # ── ask the bank step by step ──────────────────────────────────
+
+    async def ask_config(self) -> AskConfig:
+        """Async ``KnowledgeBank.ask_config``."""
+        return await self._http.get(self._path("/ask/config"))
+
+    async def ask_step(
+        self,
+        question: str | None = None,
+        *,
+        run_id: str | None = None,
+        previous_response_id: str | None = None,
+        tool_outputs: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+        max_steps: int | None = None,
+        requested_by: str | None = None,
+    ) -> AskStep:
+        """Async ``KnowledgeBank.ask_step``."""
+        if run_id:
+            body = _ask_continue_body(run_id, previous_response_id or "", tool_outputs or [])
+        else:
+            body = _ask_start_body(question or "", model=model, reasoning_effort=reasoning_effort, max_steps=max_steps, requested_by=requested_by)
+        return await self._http.post(self._path("/ask/step"), json=body)
+
+    async def _ask_execute(self, name: str, arguments: dict[str, Any]) -> Any:
+        if name == _ASK_SEARCH:
+            query = str(arguments.get("query") or "").strip()
+            if not query:
+                raise ValueError("search_knowledge_bank needs a query")
+            return _ask_search_output(await self.search(query, k=_ask_search_k(arguments), threshold=0.0, collapse=True))
+        if name == _ASK_READ:
+            entry_id = _ask_entry_id_of(arguments)
+            entry = await self.get_entry(entry_id)
+            try:
+                conns = await self.connections(str(entry.get("id") or entry_id))
+            except Exception:  # noqa: BLE001 - connections are a bonus; the entry itself is the answer
+                conns = None
+            return _ask_entry_output(entry, conns)
+        if name == _ASK_WALK:
+            params = _ask_walk_params(arguments)
+            return _ask_walk_output(await self.graph(params["root"], depth=params["depth"], limit=params["limit"]))
+        raise ValueError(f"unknown tool: {name}")
+
+    async def ask(
+        self,
+        question: str,
+        *,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+        max_steps: int | None = None,
+        requested_by: str | None = None,
+        on_step: Callable[[AskStep], None] | None = None,
+    ) -> AskStep:
+        """Async ``KnowledgeBank.ask``: the whole search / read / walk / answer loop."""
+        step = await self.ask_step(question, model=model, reasoning_effort=reasoning_effort, max_steps=max_steps, requested_by=requested_by)
+        while True:
+            if on_step is not None:
+                on_step(step)
+            if step.get("status") != "tool_calls":
+                return step
+            outputs: list[dict[str, Any]] = []
+            for call in step.get("tool_calls", []):
+                started = time.monotonic()
+                try:
+                    out = await self._ask_execute(str(call.get("name") or ""), call.get("arguments") or {})
+                    outputs.append(_ask_tool_output_item(call, out, duration_ms=(time.monotonic() - started) * 1000))
+                except Exception as exc:  # noqa: BLE001
+                    outputs.append(_ask_tool_output_item(call, error=f"{type(exc).__name__}: {exc}", duration_ms=(time.monotonic() - started) * 1000))
+            step = await self.ask_step(run_id=str(step.get("run_id") or ""), previous_response_id=step.get("response_id"), tool_outputs=outputs)
+
+    async def list_ask_runs(self, *, limit: int = 20, offset: int = 0) -> AskRunList:
+        """Async ``KnowledgeBank.list_ask_runs``."""
+        return await self._http.get(self._path("/ask/runs"), params={"limit": limit, "offset": offset})
+
+    async def get_ask_run(self, run_id: str) -> AskRunDetail:
+        """Async ``KnowledgeBank.get_ask_run``."""
+        return await self._http.get(self._path(f"/ask/runs/{run_id}"))
+
+    async def abandon_ask_run(self, run_id: str) -> AskRun:
+        """Async ``KnowledgeBank.abandon_ask_run``."""
+        return await self._http.post(self._path(f"/ask/runs/{run_id}/abandon"))
+
     async def backfill_connections(
         self, *, dry_run: bool = True, max_entries: int = 50000, actor: str | None = None,
     ) -> ConnectionBackfillReport:
@@ -798,7 +933,8 @@ class AsyncKnowledgeBank:
             max_entries: Entries scanned, newest first (default 2000).
             scope: Hard filters on the scanned entries, the same keys as
                 :meth:`list_entries` (``metadata_filters``, ``source``,
-                ``created_after`` ...).
+                ``created_after`` ..., ``metadata_date_field`` +
+                ``metadata_date_after`` / ``metadata_date_before``).
         """
         body: dict[str, Any] = {"threshold": threshold, "neighbors": neighbors, "limit": limit, "max_entries": max_entries}
         if field is not None:
@@ -990,16 +1126,57 @@ class AsyncKnowledgeBank:
         """
         return await self._http.get(self._path("/playbooks"), params=_pb.list_params(query, status, limit, min_score, genre))
 
+    async def search_processes(
+        self, query: str, *, mode: Literal["auto", "person", "how"] = "auto", limit: int = 10
+    ) -> dict[str, Any]:
+        """Reverse search over the documented business processes.
+
+        A person or role (``"Jess"``, ``"the controller"``) returns every
+        process they are part of with the steps that are theirs (``roles``:
+        does / receives / mentioned); a situation (``"a delivery arrives
+        warm"``) returns the whole flows that describe it, matching steps
+        marked. ``mode="auto"`` picks person when every word of the query
+        names someone in the processes. Each result carries the full
+        ``steps`` list, the ``chain`` of people it passes through and the
+        ``matched_positions``.
+        """
+        return await self._http.get(self._path("/process-search"), params={"q": query, "mode": mode, "limit": limit})
+
     async def get_playbook_stats(self, *, genre: PlaybookGenre | None = None) -> PlaybookStats:
         """Playbook counts by status (``active`` / ``draft`` / ``superseded``),
         optionally for one ``genre`` only."""
         return await self._http.get(self._path("/playbook-stats"), params=_pb.stats_params(genre))
 
-    async def get_playbook(self, slug: str, *, include_linked_entries: bool = True) -> Playbook:
-        """Fetch one playbook whole: every step in order plus the entries its
-        steps cite (``linked_entries``). Raises :class:`NotFoundError` for an
-        unknown slug."""
-        return await self._http.get(self._path(f"/playbooks/{slug}"), params=_pb.linked_params(include_linked_entries))
+    async def get_playbook(
+        self,
+        slug: str,
+        *,
+        include_linked_entries: bool = True,
+        include_step_knowledge: bool = False,
+        related_top_k: int | None = None,
+        related_banks: list[str] | None = None,
+        related_full: bool = False,
+    ) -> Playbook:
+        """One playbook by slug: every step in order, linked entries inlined.
+
+        ``include_step_knowledge`` adds ``step_knowledge`` (keyed by step key,
+        else position): per step the entry it cites, the learnings tied to it
+        (edges and ``metadata.applies_at``) with full text and a breadcrumb, and
+        ``related_top_k`` semantic matches on the step text per bank (the
+        playbook's own bank plus ``related_banks``), summaries only unless
+        ``related_full``; ``knowledge`` says how it was assembled and which
+        bodies the size cap dropped (kb-platform >= 1.11.0).
+        """
+        return await self._http.get(
+            self._path(f"/playbooks/{slug}"),
+            params=_pb.detail_params(
+                include_linked_entries,
+                include_step_knowledge=include_step_knowledge,
+                related_top_k=related_top_k,
+                related_banks=related_banks,
+                related_full=related_full,
+            ),
+        )
 
     async def upsert_playbook(
         self,

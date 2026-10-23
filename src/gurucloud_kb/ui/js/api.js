@@ -121,6 +121,12 @@ export function createApi(kbId, base, opts = {}) {
     graphLayout: (params) => req('GET', '/graph/layout', { params }),
     recomputeGraphLayout: (params) => req('POST', '/graph/layout/recompute', { params }),
     backfillEdges: (payload) => req('POST', '/edges/backfill', { body: payload }),
+    // ask the bank step by step (kb_service/ask_agent.py)
+    askConfig: () => req('GET', '/ask/config'),
+    askStep: (payload) => req('POST', '/ask/step', { body: payload }),
+    listAskRuns: (params) => req('GET', '/ask/runs', { params }),
+    getAskRun: (id) => req('GET', `/ask/runs/${encodeURIComponent(id)}`),
+    abandonAskRun: (id) => req('POST', `/ask/runs/${encodeURIComponent(id)}/abandon`),
     // assertions
     listAssertions: (params) => req('GET', '/assertions', { params }),
     createAssertion: (payload) => req('POST', '/assertions', { body: payload }),
@@ -146,6 +152,8 @@ export function createApi(kbId, base, opts = {}) {
     upsertPlaybook: (slug, body, params) => req('PUT', `/playbooks/${encodeURIComponent(slug)}`, { body, params }),
     deletePlaybook: (slug, params) => req('DELETE', `/playbooks/${encodeURIComponent(slug)}`, { params }),
     listPlaybookVersions: (slug) => req('GET', `/playbooks/${encodeURIComponent(slug)}/versions`),
+    // reverse search over documented processes (person/role or how-to)
+    searchProcesses: (params) => req('GET', '/process-search', { params }),
     // playbook runs (read-only; agents create them through MCP)
     listPlaybookRuns: (slug, params) => req('GET', `/playbooks/${encodeURIComponent(slug)}/runs`, { params }),
     getPlaybookRun: (runId) => req('GET', `/playbook-runs/${encodeURIComponent(runId)}`),

@@ -324,9 +324,12 @@ class SearchRequest(TypedDict, total=False):
     ``updated_before`` keys add a **hard time-window filter** on entry
     timestamps (UTC). ``event_after`` / ``event_before`` filter on the
     caller-supplied ``event_at`` (when the event/observation occurred) instead
-    of the ingest time. Each accepts an ISO-8601 string or a ``datetime``
-    (serialized for you) and removes out-of-window rows without affecting the
-    ranking.
+    of the ingest time. ``metadata_date_field`` + ``metadata_date_after`` /
+    ``metadata_date_before`` range on an ISO-8601 timestamp you keep under
+    that metadata key (or dotted path), for a backfilled corpus whose
+    ``created_at`` is only the import date. Each bound accepts an ISO-8601
+    string or a ``datetime`` (serialized for you) and removes out-of-window
+    rows without affecting the ranking.
 
     Example::
 
@@ -356,6 +359,9 @@ class SearchRequest(TypedDict, total=False):
     updated_before: str | datetime
     event_after: str | datetime
     event_before: str | datetime
+    metadata_date_field: str
+    metadata_date_after: str | datetime
+    metadata_date_before: str | datetime
     lexical: LexicalOptions
 
 
@@ -433,7 +439,7 @@ class FieldClusterResult(TypedDict, total=False):
 class ClusterScope(TypedDict, total=False):
     """Which entries were clustered."""
 
-    source: str  # "all" | "search"
+    source: str  # "all" | "filtered" (hard filters, no query) | "search"
     entry_count: int
     truncated: bool
 
@@ -871,6 +877,48 @@ class LinkedEntry(TypedDict, total=False):
     missing: bool
 
 
+class StepKnowledgeEntry(TypedDict, total=False):
+    """One entry shown under a step by ``get_playbook(include_step_knowledge=True)``."""
+
+    id: str
+    bank: str
+    """Name of the Knowledge Bank the entry lives in."""
+    bank_id: str
+    relation: str
+    """``kb_entry_id``, an edge type (``cites`` ...), ``applies_at`` or ``related``."""
+    breadcrumb: str
+    """``<playbook slug> > <step key or position> > <entry title>``."""
+    how_linked: str
+    content: str | None
+    """Full text for ``linked`` / ``cited_by``; None on ``related`` unless ``related_full``, or when the size cap dropped it."""
+    useful_for: str | None
+    summary: str | None
+    score: float | None
+    note: str | None
+    missing: bool
+
+
+class StepKnowledge(TypedDict, total=False):
+    """What the bank(s) know at one step, in three arms."""
+
+    linked: list[StepKnowledgeEntry]
+    cited_by: list[StepKnowledgeEntry]
+    related: list[StepKnowledgeEntry]
+
+
+class PlaybookKnowledge(TypedDict, total=False):
+    """How ``step_knowledge`` was assembled."""
+
+    banks: list[str]
+    related_top_k: int
+    related_full: bool
+    max_chars: int
+    chars: int
+    truncated: bool
+    truncated_ids: list[str]
+    search_failures: list[str]
+
+
 class Playbook(TypedDict, total=False):
     """The whole playbook — every step, in order."""
 
@@ -892,6 +940,9 @@ class Playbook(TypedDict, total=False):
     linked_entries: list[LinkedEntry]
     graph: PlaybookGraph | None
     """Present on a branching playbook: start node and every edge."""
+    step_knowledge: dict[str, StepKnowledge]
+    """Per step (key, else position) when read with ``include_step_knowledge``."""
+    knowledge: PlaybookKnowledge | None
 
 
 class PlaybookOverlapCandidate(TypedDict, total=False):
@@ -1299,6 +1350,114 @@ class StartLayout(TypedDict, total=False):
     started: bool
     run: LayoutRun
     reason: str
+
+
+class AskToolCall(TypedDict, total=False):
+    """One tool the model asked for in an ask step."""
+
+    call_id: str
+    name: str  # search_knowledge_bank | read_entry | walk_graph
+    arguments: dict[str, Any]
+    raw_arguments: str
+    known: bool  # False when the model named a tool it was not given
+
+
+class AskUsage(TypedDict, total=False):
+    input_tokens: int
+    output_tokens: int
+    reasoning_tokens: int
+    cached_tokens: int
+
+
+class AskStep(TypedDict, total=False):
+    """``kb.ask_step(...)``: one model turn of an ask run."""
+
+    run_id: str
+    step: int
+    max_steps: int
+    status: str  # tool_calls | answered | step_limit | failed
+    run_status: str  # running | answered | step_limit | failed | abandoned
+    response_id: str  # pass back as previous_response_id with the tool outputs
+    model: str
+    reasoning_effort: str
+    credential_source: str
+    thinking: list[str]  # what the model said before acting (narration, reasoning summaries)
+    tool_calls: list[AskToolCall]
+    answer: str
+    citations: list[str]  # entry ids the answer references
+    usage: AskUsage
+    run_usage: AskUsage
+    duration_ms: float
+    error: str
+
+
+class AskRun(TypedDict, total=False):
+    """One recorded ask run (the audit trail's header row)."""
+
+    id: str
+    question: str
+    model: str
+    reasoning_effort: str
+    status: str
+    steps: int
+    max_steps: int
+    started_at: str
+    finished_at: str
+    answer: str
+    citations: list[str]
+    usage: AskUsage
+    requested_by: str
+    credential_source: str
+    error: str
+
+
+class AskStepRecord(TypedDict, total=False):
+    """One recorded model turn: the request sent, the raw response, the parsed thinking and tool calls."""
+
+    id: str
+    run_id: str
+    step_no: int
+    status: str
+    previous_response_id: str
+    response_id: str
+    request: dict[str, Any]
+    response: dict[str, Any]
+    thinking: list[str]
+    tool_calls: list[AskToolCall]
+    usage: AskUsage
+    duration_ms: float
+    error: str
+    created_at: str
+
+
+class AskRunDetail(TypedDict, total=False):
+    """``kb.get_ask_run(run_id)``."""
+
+    run: AskRun
+    steps: list[AskStepRecord]
+
+
+class AskRunList(TypedDict, total=False):
+    """``kb.list_ask_runs(...)``."""
+
+    runs: list[AskRun]
+    limit: int
+    offset: int
+
+
+class AskConfig(TypedDict, total=False):
+    """``kb.ask_config()``: what the Ask feature offers on this bank."""
+
+    available: bool
+    unavailable_reason: str
+    credential_source: str
+    models: list[str]
+    default_model: str
+    reasoning_efforts: list[str]
+    default_reasoning_effort: str
+    max_steps_default: int
+    max_steps_max: int
+    tools: list[dict[str, str]]
 
 
 class ConnectionBackfillReport(TypedDict, total=False):

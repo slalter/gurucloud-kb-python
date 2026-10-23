@@ -99,3 +99,34 @@ class TestAsync:
         params = entries.calls[0].request.url.params
         assert json.loads(params["metadata_filters"]) == {"tags": ["a"]} and params["updated_before"] == "2026-10-13"
         assert out["total_entries"] == 812 and facets.calls[0].request.url.params["max_values"] == "25"
+
+
+class TestMetadataDateWindow:
+    def test_list_params_carry_the_window(self) -> None:
+        since = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        params = build_list_params(limit=10, offset=0, metadata_date_field="observed_at", metadata_date_after=since, metadata_date_before="2025-01-01")
+        assert params["metadata_date_field"] == "observed_at"
+        assert params["metadata_date_after"] == since.isoformat() and params["metadata_date_before"] == "2025-01-01"
+
+    def test_window_absent_by_default(self) -> None:
+        assert not any(k.startswith("metadata_date") for k in build_list_params(limit=1, offset=0))
+
+    @respx.mock
+    def test_list_entries_sends_the_window(self) -> None:
+        respx.get(f"{API_PREFIX}/banks/kb-1").mock(return_value=httpx.Response(200, json={"data": KB_INFO}))
+        route = respx.get(f"{API_PREFIX}/banks/kb-1/entries").mock(return_value=httpx.Response(200, json={"data": []}))
+        kb = GuruCloudClient(api_key=API_KEY, base_url=BASE_URL).get_kb("kb-1")
+        kb.list_entries(metadata_date_field="observed_at", metadata_date_after="2024-01-01")
+        params = route.calls[0].request.url.params
+        assert params["metadata_date_field"] == "observed_at" and params["metadata_date_after"] == "2024-01-01"
+        assert "metadata_date_before" not in params
+
+    @respx.mock
+    def test_search_string_query_sends_the_window(self) -> None:
+        respx.get(f"{API_PREFIX}/banks/kb-1").mock(return_value=httpx.Response(200, json={"data": KB_INFO}))
+        route = respx.post(f"{API_PREFIX}/banks/kb-1/search").mock(return_value=httpx.Response(200, json={"data": []}))
+        kb = GuruCloudClient(api_key=API_KEY, base_url=BASE_URL).get_kb("kb-1")
+        kb.search("late orders", metadata_date_field="observed_at", metadata_date_before=datetime(2024, 12, 31, tzinfo=timezone.utc))
+        body = json.loads(route.calls[0].request.content)
+        assert body["metadata_date_field"] == "observed_at" and body["metadata_date_before"] == "2024-12-31T00:00:00+00:00"
+        assert "metadata_date_after" not in body

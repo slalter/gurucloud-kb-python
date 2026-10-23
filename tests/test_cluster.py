@@ -393,3 +393,52 @@ def test_cluster_sync_star_field_and_description_passthrough() -> None:
     out = kb.cluster(fields=["*"], label=True)
     assert json.loads(route.calls[0].request.content)["fields"] == ["*"]
     assert _raw(out)["results"][0]["clusters"][0]["description"] == "Launch, stop and lease handling."
+
+
+@respx.mock
+def test_cluster_sync_sends_filter_scope_and_omits_when_unset() -> None:
+    respx.get(f"{API_PREFIX}/banks/test-kb-uuid").mock(
+        return_value=httpx.Response(200, json={"data": KB_INFO})
+    )
+    kb = GuruCloudClient(api_key=API_KEY, base_url=BASE_URL).get_kb("test-kb-uuid")
+    route = respx.post(f"{API_PREFIX}/banks/test-kb-uuid/cluster").mock(
+        return_value=httpx.Response(
+            200, json={"data": {"scope": {"source": "filtered", "entry_count": 7}, "results": []}}
+        )
+    )
+
+    from datetime import datetime, timezone
+
+    result = kb.cluster(
+        fields=["content"],
+        scope={"metadata_date_field": "observed_at", "metadata_date_after": datetime(2024, 1, 1, tzinfo=timezone.utc), "source": None},
+        scope_limit=500,
+    )
+    assert _raw(result)["scope"]["source"] == "filtered"
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["scope"] == {"metadata_date_field": "observed_at", "metadata_date_after": "2024-01-01T00:00:00+00:00"}
+    assert sent["scope_limit"] == 500 and "search" not in sent
+
+    kb.cluster(fields=["content"])
+    assert "scope" not in json.loads(route.calls[1].request.content)
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_cluster_async_sends_filter_scope() -> None:
+    respx.get(f"{API_PREFIX}/banks/test-kb-uuid").mock(
+        return_value=httpx.Response(200, json={"data": KB_INFO})
+    )
+    client = AsyncGuruCloudClient(api_key=API_KEY, base_url=BASE_URL)
+    kb = await client.get_kb("test-kb-uuid")
+    route = respx.post(f"{API_PREFIX}/banks/test-kb-uuid/cluster").mock(
+        return_value=httpx.Response(
+            200, json={"data": {"scope": {"source": "filtered", "entry_count": 0}, "results": []}}
+        )
+    )
+
+    await kb.cluster(scope={"metadata_filters": {"kind": "signal"}, "metadata_date_field": "observed_at", "metadata_date_before": "2025-01-01"})
+    await client.close()
+
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["scope"] == {"metadata_filters": {"kind": "signal"}, "metadata_date_field": "observed_at", "metadata_date_before": "2025-01-01"}

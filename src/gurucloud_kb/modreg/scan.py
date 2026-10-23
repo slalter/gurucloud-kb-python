@@ -10,16 +10,26 @@ Candidate = a source file that either lives under a conventional shared path
 files, …) or is imported from ``fan_in_threshold`` or more other files. Fan-in
 is computed with per-language regexes over the whole tree; it ranks
 candidates, it does not decide anything — the agent reads the file.
+
+Python module names are indexed relative to every *source root* of the
+repository (``python_source_roots``): the root itself plus whatever a
+src-layout declares (``[tool.setuptools.packages.find] where``,
+``package-dir``, poetry ``packages[].from``, hatch wheel ``packages``, pytest
+``pythonpath``, ``setup.cfg`` ``package_dir``) or a top-level ``src/`` holding
+packages. ``src/airsa/domain/enums.py`` is therefore reachable as both
+``src.airsa.domain.enums`` and ``airsa.domain.enums``, while the emitted
+``Candidate.path`` stays repo-relative (the ledger keys rows by it).
 """
 from __future__ import annotations
 
 import ast
+import configparser
 import json
 import re
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
-from typing import Iterable, Optional
+from pathlib import Path, PurePosixPath
+from typing import Iterable, Optional, Sequence
 
 DEFAULT_SHARED_PATTERNS: tuple[str, ...] = (
     r"(^|/)services/shared/", r"(^|/)shared/", r"(^|/)utils?/", r"(^|/)helpers?/",
@@ -107,6 +117,239 @@ def _python_module_names(rel: str) -> set[str]:
     return names
 
 
+# ---------------------------------------------------------------------------
+# Python source roots (src layout)
+# ---------------------------------------------------------------------------
+_TOML_SECTION_RE = re.compile(r"^\s*\[([^\[\]]+)\]\s*(?:#.*)?$")
+_TOML_KEY_RE = re.compile(r'^\s*(?:"(?P<quoted>[^"]*)"|(?P<bare>[A-Za-z0-9_.-]+))\s*=\s*(?P<rest>.*)$')
+_TOML_STRING_RE = re.compile(r'"([^"]*)"|\'([^\']*)\'')
+_TOML_PAIR_RE = re.compile(r'(?:"(?P<quoted>[^"]*)"|(?P<bare>[A-Za-z0-9_.-]+))\s*=\s*(?:"(?P<value>[^"]*)"|\'(?P<value_sq>[^\']*)\')')
+_TOML_FROM_RE = re.compile(r'\bfrom\s*=\s*(?:"([^"]*)"|\'([^\']*)\')')
+
+
+def _toml_strings(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [v for v in value if isinstance(v, str)]
+    return []
+
+
+def _dig(table: object, *keys: str) -> object:
+    for key in keys:
+        if not isinstance(table, dict):
+            return None
+        table = table.get(key)
+    return table
+
+
+def _roots_from_package_dir(mapping: dict[str, str]) -> list[str]:
+    """``{"" : "src"}`` names a root outright; ``{"pkg": "src/pkg"}`` implies ``src``."""
+    out: list[str] = []
+    for key, value in mapping.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            continue
+        if key == "":
+            out.append(value)
+            continue
+        tail = "/" + key.replace(".", "/")
+        v = value.replace("\\", "/").rstrip("/")
+        if v.endswith(tail):
+            out.append(v[: -len(tail)] or ".")
+    return out
+
+
+def _roots_from_pyproject_data(data: dict) -> list[str]:
+    out: list[str] = []
+    out += _toml_strings(_dig(data, "tool", "setuptools", "packages", "find", "where"))
+    package_dir = _dig(data, "tool", "setuptools", "package-dir")
+    if isinstance(package_dir, dict):
+        out += _roots_from_package_dir(package_dir)
+    poetry_packages = _dig(data, "tool", "poetry", "packages")
+    if isinstance(poetry_packages, list):
+        for entry in poetry_packages:
+            if isinstance(entry, dict) and isinstance(entry.get("from"), str):
+                out.append(entry["from"])
+    for pkg in _toml_strings(_dig(data, "tool", "hatch", "build", "targets", "wheel", "packages")):
+        out.append(PurePosixPath(pkg.replace("\\", "/")).parent.as_posix())
+    pythonpath = _dig(data, "tool", "pytest", "ini_options", "pythonpath")
+    out += pythonpath.split() if isinstance(pythonpath, str) else _toml_strings(pythonpath)
+    return out
+
+
+def _toml_fallback_entries(text: str) -> list[tuple[str, str, str]]:
+    """``(section, key, raw_value)`` per top-level assignment, arrays/tables joined
+    across lines. A line-oriented subset reader for Python 3.10, which has no tomllib."""
+    entries: list[tuple[str, str, str]] = []
+    section = ""
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        i += 1
+        sec = _TOML_SECTION_RE.match(line)
+        if sec:
+            section = sec.group(1).strip().replace('"', "").replace("'", "")
+            continue
+        km = _TOML_KEY_RE.match(line)
+        if not km:
+            continue
+        key = km.group("quoted") if km.group("quoted") is not None else km.group("bare")
+        rest = km.group("rest")
+        depth = rest.count("[") + rest.count("{") - rest.count("]") - rest.count("}")
+        while depth > 0 and i < len(lines):
+            rest += "\n" + lines[i]
+            depth += lines[i].count("[") + lines[i].count("{") - lines[i].count("]") - lines[i].count("}")
+            i += 1
+        entries.append((section, key, rest))
+    return entries
+
+
+def _roots_from_pyproject_fallback(text: str) -> list[str]:
+    """Rebuild just the tables ``_roots_from_pyproject_data`` reads, then derive the
+    roots through that one function so both readers agree on order and semantics."""
+    where: list[str] = []
+    package_dir: dict[str, str] = {}
+    poetry: list[dict[str, str]] = []
+    hatch: list[str] = []
+    pythonpath: list[str] = []
+    for section, key, raw in _toml_fallback_entries(text):
+        full = f"{section}.{key}" if section else key
+        strings = [a or b for a, b in _TOML_STRING_RE.findall(raw)]
+        if full == "tool.setuptools.packages.find.where":
+            where += strings
+        elif full == "tool.setuptools.package-dir":
+            for m in _TOML_PAIR_RE.finditer(raw):
+                k = m.group("quoted") if m.group("quoted") is not None else m.group("bare")
+                package_dir[k] = m.group("value") if m.group("value") is not None else (m.group("value_sq") or "")
+        elif section == "tool.setuptools.package-dir" and strings:
+            package_dir[key] = strings[0]
+        elif full == "tool.poetry.packages":
+            poetry += [{"from": a or b} for a, b in _TOML_FROM_RE.findall(raw)]
+        elif full == "tool.hatch.build.targets.wheel.packages":
+            hatch += strings
+        elif full == "tool.pytest.ini_options.pythonpath":
+            pythonpath += strings
+    data = {"tool": {
+        "setuptools": {"packages": {"find": {"where": where}}, "package-dir": package_dir},
+        "poetry": {"packages": poetry},
+        "hatch": {"build": {"targets": {"wheel": {"packages": hatch}}}},
+        "pytest": {"ini_options": {"pythonpath": pythonpath}},
+    }}
+    return _roots_from_pyproject_data(data)
+
+
+def _roots_from_pyproject_text(text: str, *, prefer_tomllib: bool = True) -> list[str]:
+    if prefer_tomllib:
+        try:
+            import tomllib  # Python 3.11+
+        except ImportError:  # pragma: no cover - depends on the interpreter
+            tomllib = None
+        if tomllib is not None:
+            try:
+                return _roots_from_pyproject_data(tomllib.loads(text))
+            except (tomllib.TOMLDecodeError, ValueError):
+                return []
+    return _roots_from_pyproject_fallback(text)
+
+
+def _ini_parser(text: str) -> Optional[configparser.ConfigParser]:
+    parser = configparser.ConfigParser(interpolation=None, strict=False)
+    try:
+        parser.read_string(text)
+    except configparser.Error:
+        return None
+    return parser
+
+
+def _roots_from_setup_cfg_text(text: str) -> list[str]:
+    parser = _ini_parser(text)
+    if parser is None:
+        return []
+    out: list[str] = []
+    if parser.has_option("options.packages.find", "where"):
+        out += parser.get("options.packages.find", "where").replace(",", " ").split()
+    if parser.has_option("options", "package_dir"):
+        mapping: dict[str, str] = {}
+        for line in parser.get("options", "package_dir").splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                mapping[k.strip()] = v.strip()
+        out += _roots_from_package_dir(mapping)
+    if parser.has_option("tool:pytest", "pythonpath"):
+        out += parser.get("tool:pytest", "pythonpath").split()
+    return out
+
+
+def _roots_from_pytest_ini_text(text: str) -> list[str]:
+    parser = _ini_parser(text)
+    if parser is None or not parser.has_option("pytest", "pythonpath"):
+        return []
+    return parser.get("pytest", "pythonpath").split()
+
+
+def _normalise_root(raw: str) -> Optional[str]:
+    s = raw.strip().replace("\\", "/")
+    while s.startswith("./"):
+        s = s[2:]
+    s = s.strip("/")
+    if s in ("", "."):
+        return ""
+    if raw.strip().startswith("/") or ".." in s.split("/"):
+        return None  # outside the repository
+    return s
+
+
+def python_source_roots(root: Path) -> list[str]:
+    """Repo-relative directories Python imports resolve against, ``""`` (the root) first.
+
+    Declared roots come from ``pyproject.toml`` (setuptools ``where`` /
+    ``package-dir``, poetry ``packages[].from``, hatch wheel ``packages``, pytest
+    ``pythonpath``), ``setup.cfg`` (``package_dir``, ``options.packages.find``,
+    ``tool:pytest pythonpath``) and ``pytest.ini`` / ``tox.ini`` (``pythonpath``);
+    a top-level ``src/`` whose immediate children are packages counts without any
+    declaration. Only existing directories inside the repository are kept, in
+    detection order, deduplicated.
+    """
+    raw: list[str] = []
+    pyproject = root / "pyproject.toml"
+    if pyproject.is_file():
+        try:
+            raw += _roots_from_pyproject_text(pyproject.read_text(encoding="utf-8"))
+        except (UnicodeDecodeError, OSError):
+            pass
+    setup_cfg = root / "setup.cfg"
+    if setup_cfg.is_file():
+        try:
+            raw += _roots_from_setup_cfg_text(setup_cfg.read_text(encoding="utf-8"))
+        except (UnicodeDecodeError, OSError):
+            pass
+    for ini in ("pytest.ini", "tox.ini"):
+        ini_path = root / ini
+        if ini_path.is_file():
+            try:
+                raw += _roots_from_pytest_ini_text(ini_path.read_text(encoding="utf-8"))
+            except (UnicodeDecodeError, OSError):
+                pass
+    src = root / "src"
+    if src.is_dir() and any((child / "__init__.py").is_file() for child in src.iterdir() if child.is_dir()):
+        raw.append("src")
+    roots = [""]
+    for r in raw:
+        n = _normalise_root(r)
+        if n is not None and n not in roots and (root / n).is_dir():
+            roots.append(n)
+    return roots
+
+
+def _module_names_by_source_root(rel: str, source_roots: Sequence[str]) -> Iterable[str]:
+    for sr in source_roots:
+        if sr == "":
+            yield from _python_module_names(rel)
+        elif rel.startswith(sr + "/"):
+            yield from _python_module_names(rel[len(sr) + 1:])
+
+
 def _python_imports(source: str) -> set[str]:
     try:
         tree = ast.parse(source)
@@ -157,8 +400,14 @@ def scan_repository(
     shared_patterns: Iterable[str] = DEFAULT_SHARED_PATTERNS,
     exclude_patterns: Iterable[str] = DEFAULT_EXCLUDE_PATTERNS,
     max_file_bytes: int = 400_000,
+    source_roots: Optional[Sequence[str]] = None,
 ) -> list[Candidate]:
-    """Walk ``root`` and return candidates sorted by (shared_path desc, fan_in desc, path)."""
+    """Walk ``root`` and return candidates sorted by (shared_path desc, fan_in desc, path).
+
+    ``source_roots`` overrides ``python_source_roots(root)`` (repo-relative dirs Python
+    imports resolve against; ``""`` is the root). Paths in the result are always
+    repo-relative whatever the roots are.
+    """
     root = root.resolve()
     files: dict[str, str] = {}
     for p in root.rglob("*"):
@@ -173,11 +422,19 @@ def scan_repository(
             continue
 
     all_ts = {r for r in files if Path(r).suffix in TS_EXT}
+    roots = list(source_roots) if source_roots is not None else python_source_roots(root)
+    if "" not in roots:
+        roots.insert(0, "")
+    # root-relative names first, then each declared source root in detection order,
+    # files in path order: the first owner of a dotted name wins (setdefault), so a
+    # root-layout repository indexes exactly as before and ``from src.x import`` keeps
+    # resolving next to ``from x import`` in a src-layout one.
+    py_files = sorted(r for r in files if Path(r).suffix in PY_EXT)
     py_name_index: dict[str, str] = {}
-    for rel in files:
-        if Path(rel).suffix in PY_EXT:
-            for name in _python_module_names(rel):
-                py_name_index[name] = rel
+    for sr in roots:
+        for rel in py_files:
+            for name in _module_names_by_source_root(rel, (sr,)):
+                py_name_index.setdefault(name, rel)
     css_token_owner: dict[str, str] = {}
     for rel, src in files.items():
         if Path(rel).suffix in CSS_EXT:

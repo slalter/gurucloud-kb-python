@@ -154,3 +154,27 @@ def test_normalize_serializes_datetime_event_bounds() -> None:
         {"dimensions": {"content": {"query_text": "x"}}, "event_after": dt}
     )
     assert out["event_after"] == dt.isoformat()
+
+
+def test_build_string_search_omits_metadata_date_window_by_default() -> None:
+    req = build_string_search("x", k=5, threshold=0.3)
+    assert not any(key.startswith("metadata_date") for key in req)
+
+
+def test_build_string_search_sends_metadata_date_window() -> None:
+    dt = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    req = build_string_search(
+        "x", k=5, threshold=0.3,
+        metadata_date_field="email.sent_at", metadata_date_after=dt, metadata_date_before="2025-01-01",
+    )
+    assert req["metadata_date_field"] == "email.sent_at"
+    assert req["metadata_date_after"] == dt.isoformat() and req["metadata_date_before"] == "2025-01-01"
+
+
+def test_normalize_serializes_metadata_date_bounds_and_keeps_the_field() -> None:
+    dt = datetime(2024, 6, 1, tzinfo=timezone.utc)
+    req = normalize_search_request({
+        "dimensions": {"content": "x"},
+        "metadata_date_field": "observed_at", "metadata_date_after": dt,
+    })
+    assert req["metadata_date_field"] == "observed_at" and req["metadata_date_after"] == dt.isoformat()

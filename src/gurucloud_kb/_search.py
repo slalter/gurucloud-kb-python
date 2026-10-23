@@ -25,7 +25,9 @@ from typing import Any, Optional, Union
 
 # Top-level hard-filter keys for the time window (entry timestamps, UTC).
 # created_/updated_ target the ingest/modify time; event_ targets the
-# caller-supplied event_at (when the event/observation occurred).
+# caller-supplied event_at (when the event/observation occurred);
+# metadata_date_after/_before range on the ISO-8601 timestamp kept under the
+# metadata key named by ``metadata_date_field`` (passed through as a string).
 TIME_FILTER_KEYS = (
     "created_after",
     "created_before",
@@ -33,6 +35,8 @@ TIME_FILTER_KEYS = (
     "updated_before",
     "event_after",
     "event_before",
+    "metadata_date_after",
+    "metadata_date_before",
 )
 
 # A time bound may be given as an ISO-8601 string or a datetime.
@@ -57,6 +61,9 @@ def build_string_search(
     updated_before: Optional[DateInput] = None,
     event_after: Optional[DateInput] = None,
     event_before: Optional[DateInput] = None,
+    metadata_date_field: Optional[str] = None,
+    metadata_date_after: Optional[DateInput] = None,
+    metadata_date_before: Optional[DateInput] = None,
     collapse: "bool | Mapping[str, Any] | None" = None,
 ) -> dict[str, Any]:
     """Build a request body for a simple single-string query.
@@ -64,13 +71,17 @@ def build_string_search(
     Searches the ``content`` dimension, which is present in every default
     Knowledge Bank. Any supplied time bound adds a hard filter on entry
     timestamps; ``datetime`` values are serialized to ISO-8601. ``event_*``
-    bounds filter on the caller-supplied ``event_at`` instead of ingest time.
+    bounds filter on the caller-supplied ``event_at`` instead of ingest time;
+    ``metadata_date_*`` bounds range on the timestamp kept under the metadata
+    key ``metadata_date_field``.
     """
     req: dict[str, Any] = {
         "dimensions": {"content": {"query_text": query, "weight": 1.0}},
         "k": k,
         "threshold": threshold,
     }
+    if metadata_date_field is not None:
+        req["metadata_date_field"] = metadata_date_field
     bounds = {
         "created_after": created_after,
         "created_before": created_before,
@@ -78,6 +89,8 @@ def build_string_search(
         "updated_before": updated_before,
         "event_after": event_after,
         "event_before": event_before,
+        "metadata_date_after": metadata_date_after,
+        "metadata_date_before": metadata_date_before,
     }
     for key, val in bounds.items():
         iso = _iso(val)
@@ -220,13 +233,16 @@ def build_list_params(
     updated_before: Optional[DateInput] = None,
     event_after: Optional[DateInput] = None,
     event_before: Optional[DateInput] = None,
+    metadata_date_field: Optional[str] = None,
+    metadata_date_after: Optional[DateInput] = None,
+    metadata_date_before: Optional[DateInput] = None,
 ) -> dict[str, Any]:
     """Query parameters of ``GET /banks/{kb}/entries``.
 
     ``metadata_filters`` goes on the wire as a compact JSON object (the same
-    containment semantics as the search bodies); ``source`` and the time
-    bounds as plain strings. Unset filters are left out so an unfiltered call
-    is byte-for-byte what older SDKs sent.
+    containment semantics as the search bodies); ``source``, the time bounds
+    and the metadata-date window as plain strings. Unset filters are left out
+    so an unfiltered call is byte-for-byte what older SDKs sent.
     """
     import json
 
@@ -235,6 +251,8 @@ def build_list_params(
         params["metadata_filters"] = json.dumps(dict(metadata_filters), separators=(",", ":"))
     if source is not None:
         params["source"] = source
+    if metadata_date_field is not None:
+        params["metadata_date_field"] = metadata_date_field
     bounds = {
         "created_after": created_after,
         "created_before": created_before,
@@ -242,6 +260,8 @@ def build_list_params(
         "updated_before": updated_before,
         "event_after": event_after,
         "event_before": event_before,
+        "metadata_date_after": metadata_date_after,
+        "metadata_date_before": metadata_date_before,
     }
     for key, val in bounds.items():
         iso = _iso(val)
@@ -254,9 +274,10 @@ def build_list_params(
 
 
 def normalize_pair_scope(scope: Mapping[str, Any]) -> dict[str, Any]:
-    """The ``scope`` block of ``POST /banks/{kb}/similar-pairs``: the list
-    filters (``metadata_filters``, ``source``, time bounds) with ``datetime``
-    bounds serialized to ISO-8601."""
+    """The ``scope`` block of ``POST /banks/{kb}/similar-pairs`` and
+    ``POST /banks/{kb}/cluster``: the list filters (``metadata_filters``,
+    ``source``, time bounds, the ``metadata_date_field`` window) with
+    ``datetime`` bounds serialized to ISO-8601."""
     out: dict[str, Any] = {}
     for key, val in scope.items():
         if key in TIME_FILTER_KEYS:

@@ -22,30 +22,16 @@
 import { h, mount, clear, toast, skeleton, esc, num } from './dom.js';
 import { openEntryDetail } from './entry_detail.js';
 import {
-  DEFAULTS, MAX_BANK_EDGES, RELATION_COLORS, agentView, edgePages, labelFor, layoutCaption, normalizeOptions, pictureOptions,
-  pinPositions, pointerLine, resultsOf, scene, searchGraph, searchPayload, settingsKey,
+  DEFAULTS, MAX_BANK_EDGES, RELATION_COLORS, agentView, fitPlan, flyTarget, labelFor, layoutCaption, neighbourhood, normalizeOptions,
+  pictureOptions, pinPositions, pointerLine, resultsOf, scene, searchGraph, searchPayload, settingsKey,
 } from './graph_model.js';
+import { ensureForceGraph3D as ensureLib, loadBankEdges } from './graph3d.js';
 
 const COLORS = { hit: '#5ee0c8', folded: '#f2b23a', neighbor: '#b7c4c6', ctx: '#8fa6aa', bank: '#72a6ab', bankDim: '#2d4448', dust: '#3a5054', bg: '#0f1719', selected: '#ffffff' };
 const SEM_SCALE = 420;
 const POLL_MS = 4000;
 const POLL_MAX = 40;
 
-/** Load the 3D library next to this module the first time the tab opens. */
-let libPromise = null;
-function ensureLib() {
-  if (window.ForceGraph3D) return Promise.resolve();
-  if (!libPromise) {
-    libPromise = new Promise((resolve, reject) => {
-      const s = document.createElement('script');
-      s.src = new URL('../vendor/3d-force-graph.min.js', import.meta.url).href;
-      s.onload = () => (window.ForceGraph3D ? resolve() : reject(new Error('3d-force-graph did not register')));
-      s.onerror = () => reject(new Error('could not load vendor/3d-force-graph.min.js'));
-      document.head.appendChild(s);
-    });
-  }
-  return libPromise;
-}
 
 export function createGraphView(ctx) {
   const { api } = ctx;
@@ -61,6 +47,8 @@ export function createGraphView(ctx) {
   let pollCount = 0;
   let busy = false;
   let selectedId = null;
+  let pendingFit = null;         // what the next engine stop frames (fitPlan); consumed once
+  let userMoved = false;         // the user rotated/zoomed since the last picture change
 
   // ── controls ───────────────────────────────────────────────────────────────
   const queryInput = h('input', { class: 'kbx-input', type: 'search', placeholder: 'Ask the bank the way an agent would…', dataset: { role: 'graph-query' } });
@@ -74,12 +62,12 @@ export function createGraphView(ctx) {
     h('option', { value: 'force' }, 'by connections (force)'), h('option', { value: 'content' }, 'by meaning: content'), h('option', { value: 'useful_for' }, 'by meaning: useful_for'), h('option', { value: 'both' }, 'by meaning: both'));
   const backfillCb = h('input', { type: 'checkbox', checked: true, dataset: { role: 'graph-hide-backfill' } });
   const searchBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', dataset: { role: 'graph-search' }, onClick: runSearch }, h('i', { class: 'bi bi-search' }), 'Search');
-  const clearBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { role: 'graph-clear' }, onClick: () => { queryInput.value = ''; lastAnswer = null; render(); } }, 'Whole bank');
+  const clearBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { role: 'graph-clear' }, onClick: () => { queryInput.value = ''; lastAnswer = null; render('picture'); } }, 'Whole bank');
   queryInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') runSearch(); });
   collapseCb.addEventListener('change', () => { neighborsSel.disabled = !collapseCb.checked; });
   [kInput, collapseCb, neighborsSel].forEach((i) => i.addEventListener('change', saveSettings));
-  [contextCb, focusSel, backfillCb].forEach((i) => i.addEventListener('change', () => { saveSettings(); render(); }));
-  layoutSel.addEventListener('change', () => { saveSettings(); render(); });
+  [contextCb, focusSel, backfillCb].forEach((i) => i.addEventListener('change', () => { saveSettings(); render('picture'); }));
+  layoutSel.addEventListener('change', () => { saveSettings(); render('picture'); });
 
   const toolbar = h('div', { class: 'kbx-card' },
     h('div', { class: 'kbx-card-head' },
@@ -140,16 +128,8 @@ export function createGraphView(ctx) {
   // ── data ───────────────────────────────────────────────────────────────────
   async function fetchBankEdges() {
     if (bankEdges) return bankEdges;
-    const stats = await api.edgeStats();
-    const total = Number(stats && stats.total) || 0;
-    const out = [];
-    for (const page of edgePages(Math.min(total, MAX_BANK_EDGES))) {
-      const resp = await api.listEdges(page);
-      out.push(...((resp && resp.edges) || []));
-    }
-    bankEdges = out;
-    bankEdges.total = total;
-    return out;
+    bankEdges = await loadBankEdges(api, MAX_BANK_EDGES);
+    return bankEdges;
   }
 
   async function fetchLayout(space) {
@@ -166,7 +146,7 @@ export function createGraphView(ctx) {
       const body = await fetchLayout(space);
       if (body.status === 'computing' && pollCount < POLL_MAX && picture().layout === space) { pollTimer = setTimeout(tick, POLL_MS); return; }
       pollTimer = null;
-      if (picture().layout === space) render();
+      if (picture().layout === space) render('auto');
     };
     pollTimer = setTimeout(tick, POLL_MS);
   }
@@ -200,8 +180,11 @@ export function createGraphView(ctx) {
   }
   function linkColor(l) { return l.pointer ? COLORS.folded : (RELATION_COLORS[l.relation] || RELATION_COLORS.connected); }
 
-  async function render() {
+  /** Redraw; `fit` is the camera intent once the engine settles (see fitPlan). */
+  async function render(fit = 'picture') {
     if (!bankEdges) return;
+    if (fit !== 'auto') userMoved = false;
+    pendingFit = fit;
     const o = options(); const p = picture();
     const answer = lastAnswer ? searchGraph(lastAnswer.results, lastAnswer.connections, { context: o.context }) : null;
     const sc = scene([...bankEdges, ...extraEdges], answer, { focus: p.focus, hideBackfill: p.hideBackfill });
@@ -246,17 +229,27 @@ export function createGraphView(ctx) {
     recomputeBtn.style.display = body && (body.status === 'ready' || body.status === 'failed') ? '' : 'none';
   }
 
+  /** Frame the picture: the lit answer when there is one, else everything. */
   function fitView() {
     if (!fg) return;
     const lit = lastAnswer ? fg.graphData().nodes.filter((n) => n.lit) : [];
     if (lit.length) fg.zoomToFit(600, 80, (n) => n.lit); else fg.zoomToFit(600, 40);
   }
 
+  /** Engine settled. Any accessor change (a selection recolour) restarts the
+      engine without new data, so only a pending render intent moves the camera. */
+  function onSettled() {
+    if (!fg) return;
+    const { nodes, links } = fg.graphData();
+    const plan = fitPlan({ pending: pendingFit, userMoved, selectedPresent: nodes.some((n) => n.id === selectedId), litCount: lastAnswer ? nodes.filter((n) => n.lit).length : 0 });
+    pendingFit = null;
+    if (plan === 'selection') { const ids = neighbourhood(selectedId, links); fg.zoomToFit(600, 80, (n) => ids.has(n.id)); }
+    else if (plan !== 'none') fitView();
+  }
+
   function flyTo(n) {
     if (!fg || n.x === undefined) return;
-    const dist = 110;
-    const r = 1 + dist / (Math.hypot(n.x, n.y, n.z) || 1);
-    fg.cameraPosition({ x: n.x * r, y: n.y * r, z: n.z * r }, n, 700);
+    fg.cameraPosition(flyTarget(n, fg.camera().position, 110), n, 700);
   }
 
   async function initGraph() {
@@ -272,13 +265,15 @@ export function createGraphView(ctx) {
         .linkDirectionalParticles((l) => (l.pointer ? 3 : 0)).linkDirectionalParticleWidth(1.8).linkDirectionalParticleColor(() => COLORS.folded)
         .onNodeClick((n) => selectNode(n))
         .onNodeHover((n) => { canvas.style.cursor = n ? 'pointer' : 'default'; })
-        .onEngineStop(() => fitView())
+        .onEngineStop(() => onSettled())
         .enableNodeDrag(false);
     } catch (e) {
       showOverlay(h('div', { class: 'kbx-alert danger' }, `WebGL is needed for the 3D graph: ${e.message}`));
       fg = null;
       return false;
     }
+    const controls = fg.controls();
+    if (controls && controls.addEventListener) controls.addEventListener('start', () => { userMoved = true; });
     if (window.ResizeObserver) new ResizeObserver(() => { if (fg && canvas.clientWidth) fg.width(canvas.clientWidth).height(canvas.clientHeight); }).observe(canvas);
     return true;
   }
@@ -337,6 +332,7 @@ export function createGraphView(ctx) {
 
   async function selectNode(n) {
     selectedId = n.id;
+    pendingFit = null; // the user took the camera: a render still settling must not pull it back out
     if (fg) fg.nodeColor(nodeColor); // re-evaluate colours (selected ring)
     flyTo(n);
     let entry = bankEnds[n.id];
@@ -377,7 +373,7 @@ export function createGraphView(ctx) {
       lastAnswer.results = lastAnswer.results.map((r) => (r.id === id ? { ...r, related: [...(r.related || []), ...extra.filter((x) => !(r.related || []).some((pt) => pt.id === x)).map((x) => ({ id: x, relation: 'connected', direction: 'outgoing', kind: 'neighbor', text: labelFor(bankEnds[x]) }))] } : r));
       if (!lastAnswer.results.some((r) => r.id === id)) lastAnswer.results = [...lastAnswer.results, { id, content: '', useful_for: labelFor(bankEnds[id]), combined_score: 0, metadata: {}, related: extra.map((x) => ({ id: x, relation: 'connected', direction: 'outgoing', kind: 'neighbor', text: labelFor(bankEnds[x]) })) }];
     }
-    await render();
+    await render('selection');
     toast(added ? `${added} connection${added === 1 ? '' : 's'} revealed` : 'Every connection of this entry is already drawn', 'info');
   }
 

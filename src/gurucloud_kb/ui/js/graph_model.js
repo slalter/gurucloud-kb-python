@@ -413,3 +413,39 @@ export function edgePages(total, pageSize = 500) {
 
 /** Per-bank localStorage key for the tab's knobs. */
 export function settingsKey(kbId) { return `kbx-graph:${kbId}`; }
+
+/** What the camera does when the engine settles. `pending` is the intent the
+    last render left behind: null (nothing changed, e.g. a selection recolour
+    restarted the engine), 'auto' (a background refresh such as a layout poll;
+    yields to a camera the user has moved), 'picture' (the user changed what
+    is drawn) or 'selection' (frame the selected entry and its neighbours).
+    Returns 'none' | 'selection' | 'lit' | 'all'. */
+export function fitPlan({ pending = null, userMoved = false, selectedPresent = false, litCount = 0 } = {}) {
+  if (!pending) return 'none';
+  if (pending === 'auto' && userMoved) return 'none';
+  if (pending === 'selection' && selectedPresent) return 'selection';
+  return litCount ? 'lit' : 'all';
+}
+
+/** Camera position `dist` from `node`, keeping the direction the camera
+    already looks from so flying to an entry never swings around the graph.
+    Falls back to the node's direction from the origin, then to +z. */
+export function flyTarget(node, cam, dist = 110) {
+  const p = { x: node.x || 0, y: node.y || 0, z: node.z || 0 };
+  let d = cam ? { x: cam.x - p.x, y: cam.y - p.y, z: cam.z - p.z } : { x: 0, y: 0, z: 0 };
+  let len = Math.hypot(d.x, d.y, d.z);
+  if (len < 1e-6) { d = { ...p }; len = Math.hypot(d.x, d.y, d.z); }
+  if (len < 1e-6) { d = { x: 0, y: 0, z: 1 }; len = 1; }
+  return { x: p.x + (d.x / len) * dist, y: p.y + (d.y / len) * dist, z: p.z + (d.z / len) * dist };
+}
+
+/** The selected entry plus every entry one drawn edge away from it. */
+export function neighbourhood(id, links) {
+  const ids = new Set([id]);
+  (links || []).forEach((l) => {
+    const s = l.source && l.source.id !== undefined ? l.source.id : l.source;
+    const t = l.target && l.target.id !== undefined ? l.target.id : l.target;
+    if (s === id) ids.add(t); else if (t === id) ids.add(s);
+  });
+  return ids;
+}

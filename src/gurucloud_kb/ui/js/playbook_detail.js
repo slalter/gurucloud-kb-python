@@ -13,7 +13,9 @@ import { isProcess, handoffRows, optionalColumns, documentationBanner, processMe
 export const STATUS_CHIP = { active: 'success', draft: 'warn', superseded: 'muted' };
 const MIN_DELETE_REASON = 20;
 
-export async function openPlaybookDetail(ctx, slug, { onChanged } = {}) {
+export async function openPlaybookDetail(ctx, slug, { onChanged, highlight } = {}) {
+  // `highlight`: step positions to mark (the search's matching hand-offs); the detail scrolls to the first.
+  const hits = new Set((highlight || []).map(Number));
   const { api } = ctx;
   const ref = openModal({ title: 'Playbook', body: skeleton('Loading…'), wide: true });
   let pb;
@@ -30,7 +32,7 @@ export async function openPlaybookDetail(ctx, slug, { onChanged } = {}) {
   const ordered = isBranching(allSteps) ? sortSteps(allSteps) : allSteps;
   ordered.forEach((st) => {
     const linked = st.kb_entry_id ? linkedById[st.kb_entry_id] : null;
-    steps.append(h('li', { class: 'kbx-step' },
+    steps.append(h('li', { class: `kbx-step${hits.has(Number(st.position)) ? ' is-hit' : ''}` },
       h('span', { class: 'kbx-step-num' }),
       h('div', { class: 'kbx-step-body' },
         h('div', { class: 'kbx-step-title' }, st.title, stepBadges(st)),
@@ -53,7 +55,7 @@ export async function openPlaybookDetail(ctx, slug, { onChanged } = {}) {
     h('div', { class: 'kbx-alert info', style: { marginBottom: '14px' } }, h('i', { class: process ? 'bi bi-diagram-3' : 'bi bi-signpost-2' }), h('div', {}, h('strong', {}, process ? 'About — ' : 'When to use — '), pb.when_to_use)),
     pb.summary ? h('p', { style: { color: 'var(--kbx-body)', marginTop: 0 } }, pb.summary) : null,
     process ? processMeta(pb.metadata) : null,
-    process ? handoffTable(ordered) : null,
+    process ? handoffTable(ordered, { highlight: hits }) : null,
     h('h4', { style: { fontSize: '14px', color: 'var(--kbx-heading)', margin: '10px 0 4px' } }, process ? `${n} hand-off${n === 1 ? '' : 's'} in detail` : `${n} step${n === 1 ? '' : 's'}`),
     steps,
     process ? null : runsSection(ctx, pb),
@@ -62,6 +64,14 @@ export async function openPlaybookDetail(ctx, slug, { onChanged } = {}) {
       h('dt', {}, 'Updated'), h('dd', {}, fmtDate(pb.updated_at)),
       h('dt', {}, 'Created by'), h('dd', {}, pb.created_by || '—'))));
 
+  if (hits.size) {
+    requestAnimationFrame(() => {
+      const first = ref.dialog.querySelector('.is-hit');
+      const body = ref.body;
+      // scroll the dialog body only: scrollIntoView would also drag the page behind the dialog
+      if (first && body) body.scrollTop = Math.max(0, first.offsetTop - body.clientHeight / 3);
+    });
+  }
   const changed = () => { if (onChanged) onChanged(); };
   const versionsBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', onClick: () => { ref.close(); openPlaybookVersions(ctx, slug, { onChanged }); } }, h('i', { class: 'bi bi-clock-history' }), 'Versions');
   const editBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', onClick: () => { ref.close(); openPlaybookEditor(ctx, pb, { onSaved: changed }); } }, h('i', { class: 'bi bi-pencil' }), 'Edit');
@@ -80,7 +90,8 @@ function processMeta(metadata) {
 }
 
 /** The hand-off table of a documented process: step, actor, what happens, system, hands to (+ needs / exceptions / source when filled). */
-export function handoffTable(orderedSteps) {
+export function handoffTable(orderedSteps, { highlight } = {}) {
+  const hits = highlight instanceof Set ? highlight : new Set((highlight || []).map(Number));
   const rows = handoffRows(orderedSteps);
   const extra = optionalColumns(rows);
   const EXTRA_LABEL = { needs: 'Needs', exceptions: 'Exceptions', source: 'Source' };
@@ -88,13 +99,22 @@ export function handoffTable(orderedSteps) {
   return h('div', { class: 'kbx-table-wrap', style: { marginBottom: '14px' } },
     h('table', { class: 'kbx-table', dataset: { role: 'handoff-table' } },
       h('thead', {}, h('tr', {}, ...head.map((c) => h('th', {}, c)))),
-      h('tbody', {}, ...rows.map((r) => h('tr', { dataset: { role: 'handoff-row', key: r.key || '' } },
-        h('td', { class: 'kbx-mono' }, r.key || String(r.position)),
+      h('tbody', {}, ...rows.map((r, i) => h('tr', { class: hits.has(Number(r.position)) ? 'is-hit' : null, dataset: { role: 'handoff-row', key: r.key || '' } },
+        h('td', {}, h('div', { class: 'kbx-strong' }, String(r.position)), r.key ? h('div', { class: 'kbx-mono kbx-muted', style: { fontSize: '11px' } }, r.key) : null),
         h('td', {}, r.actor ? h('span', { class: 'kbx-strong' }, r.actor) : h('span', { class: 'kbx-muted' }, r.kind === 'end' ? '—' : '(no actor)')),
         h('td', {}, h('div', { class: 'kbx-strong' }, r.title), h('div', { class: 'kbx-muted', style: { fontSize: '12px' } }, r.body)),
         h('td', {}, r.system || '—'),
-        h('td', {}, r.hands_to || '—'),
+        h('td', {}, r.hands_to || '—', branchLines(orderedSteps[i], orderedSteps)),
         ...extra.map((c) => h('td', {}, r[c] || '—')))))));
+}
+
+/** Under a decision's "Hands to": where each answer goes ("when X → KEY"), so a branch is readable in the table. */
+function branchLines(st, ordered) {
+  if (!st || stepKind(st) !== 'decision') return null;
+  const lines = describeTransitions(st, ordered);
+  if (!lines.length) return null;
+  return h('ul', { class: 'kbx-branch-lines', dataset: { role: 'branch-lines' } },
+    ...lines.map((l) => h('li', {}, l.text)));
 }
 
 /** Kind badge (Decision / End; nothing for an action) and the step key. */

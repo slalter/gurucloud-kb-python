@@ -1049,6 +1049,140 @@ edit the harness, they file a card.
 
 ## Changelog
 
+### 0.16.0
+
+- **modreg scan: src-layout repositories resolve Python imports** (kanban
+  3b9f5150). `gurucloud_kb.modreg.scan` indexed module names relative to
+  `--root` only, so a package under `src/` imported as `pkg.mod` matched
+  nothing, every file had fan-in 0 and `ledger sync-scan --root .` returned
+  zero candidates. New `python_source_roots(root)` detects the source roots
+  (pyproject `[tool.setuptools.packages.find] where`, `package-dir`, poetry
+  `packages[].from`, hatch wheel `packages`, pytest `pythonpath`; setup.cfg
+  `package_dir` / `options.packages.find` / `tool:pytest`; pytest.ini and
+  tox.ini `pythonpath`; or a top-level `src/` holding packages) and
+  `scan_repository` indexes every Python file under each root as well as under
+  the repository root (root-relative names win a collision). Emitted paths stay
+  repo-relative, so ledger rows keep their keys; `scan_repository(...,
+  source_roots=[...])` overrides detection. Run `sync-scan --root .` as before.
+
+### 0.15.0
+
+- **`get_playbook(..., include_step_knowledge=True)`** (kb-platform >= 1.11.0,
+  kanban 8d7ecf49). The playbook comes back with `step_knowledge`, keyed by
+  step key (else position): per step `linked` (the entry the step cites),
+  `cited_by` (learnings whose edge or `metadata.applies_at` names the step)
+  with full text and a breadcrumb `"<slug> > <step> > <entry title>"`, and
+  `related` semantic matches on the step text, `related_top_k` per bank
+  (default 3, 0 disables) over the playbook's own bank plus `related_banks`
+  (bank names), summaries only unless `related_full=True`. `knowledge` says
+  which banks were searched and which bodies the size cap dropped
+  (`truncated_ids`; fetch them with `get_entry`). New TypedDicts
+  `StepKnowledgeEntry`, `StepKnowledge`, `PlaybookKnowledge`. Sync and async.
+
+### 0.14.2
+
+- **Playground mode polish.** In `data-mode="playground"` the bundle hides the
+  bank description (the host page carries its own intro), leaves the page's
+  `<title>` alone, and hides the Ask tab's model / thinking / max-steps knobs
+  (`mode_model.js`: `showsBankDescription`, `ownsDocumentTitle`,
+  `showsModelKnobs`). Other hosts unchanged.
+
+### 0.14.1
+
+- **Explorer: the Process search tab shows again.** 0.14.0 landed beside the
+  host-mode panel list that the playground introduced, and the tab was not in
+  that list, so no host rendered it. A tab hash may also carry its own state
+  (`#process-search?q=Jess`) and still open that tab.
+
+### 0.14.0
+
+- **Process search.** `kb.search_processes(query, mode="auto"|"person"|"how")`
+  searches the documented business processes from the other end: a person or
+  role returns every process they are part of and which steps are theirs; a
+  situation returns the whole flows that describe it, with `matched_total`,
+  each hit's `cast` (distinct people with step counts) and `matched_positions`.
+  The Explorer has a matching **Process search** tab: one answer line per
+  process ("Does steps 1–3, 6 · receives 4"), the people in the flow (click
+  one to pivot), and the process detail opening with the matching hand-offs
+  highlighted; the search lives in the URL hash so Back returns to it. Needs
+  a KB service that serves `GET /process-search`.
+
+### 0.13.4
+
+- **Ask: a failed step names its cause.** When `POST /ask/step` fails, the
+  Ask tab shows the HTTP status the service answered (when the message does
+  not already carry it) and, for a non-JSON upstream error page, the page's
+  text under a **Details** toggle (`stepFailure` in `ui/js/ask_model.js`,
+  pure and Node-tested). The kb service now answers every ask-step crash as
+  JSON `{error: ask_step_failed, message, run_id}` and marks the run failed.
+
+### 0.13.3
+
+- **Explorer host mode `playground`.** `#kbx-root` with `data-mode="playground"`
+  shows only the Ask and Graph tabs, starts on Ask, labels the host "Public
+  playground" and has no Knowledge Banks back link (`ui/js/mode_model.js`,
+  pure and Node-tested). Backs the hosted app's public `/playground/ask` page on
+  one demo bank. Every other host is unchanged.
+
+### 0.13.2
+
+- **Ask: the model sees every search row.** `search_knowledge_bank` outputs
+  (Explorer Ask tab and `gurucloud_kb._ask.search_output`) cut each row's
+  `content` to 800 characters (`read_entry` still returns the full text), so
+  a k=10 search with its pointers and collapse summary fits the service's
+  search cap instead of being cut after 4 to 6 rows. Replaying a run reads
+  the whole outputs the service now records beside the capped strings the
+  model saw; runs recorded earlier still replay from those strings.
+
+### 0.13.1
+
+- **Explorer Graph tab: the camera stops bouncing.** Clicking an entry flies
+  to it along the direction you are already looking from and stays there;
+  the engine restart a selection causes no longer triggers a zoom-to-fit.
+  The picture is framed once per real change (a search, a picture knob,
+  "Whole bank"); a background layout refresh leaves a camera you have moved
+  alone; "Show its connections" frames the entry and its neighbours.
+
+### 0.13.0
+
+- **Ask the bank, step by step.** `kb.ask(question, on_step=...)` lets a small
+  model (the platform's cheap model, gpt-6-luna by default) work a question
+  against the bank the way an agent does: it searches, reads entries, follows
+  the pointers retrieval attaches and walks the connection graph through this
+  client, then answers with `[id]` citations. Each turn is one
+  `kb.ask_step(...)` (`POST /banks/{kb}/ask/step`, the OpenAI Responses API
+  behind it); the client executes the returned `tool_calls`
+  (`search_knowledge_bank`, `read_entry`, `walk_graph`) and posts the outputs
+  back, so a script sees every search and every entry the model touched.
+  Runs are recorded per bank: `kb.list_ask_runs()`, `kb.get_ask_run(run_id)`
+  (every turn's request, raw response, thinking and tool calls),
+  `kb.abandon_ask_run(run_id)`; `kb.ask_config()` says which models are
+  offered and whether a model credential exists. Async mirrors on
+  `AsyncKnowledgeBank`. New types `AskConfig`, `AskStep`, `AskToolCall`,
+  `AskUsage`, `AskRun`, `AskStepRecord`, `AskRunDetail`, `AskRunList`.
+- **Explorer Ask tab.** The same loop in the browser: the model's own words
+  before each step, every tool call with what came back, and the answer with
+  clickable citations on the left; the Graph tab's 3D scene on the right with
+  everything the model touched lit up (searched, pointed-at, read, walked,
+  cited). Run without stopping or step through with "Next step"; click a step
+  to see the bank as it looked then; replay any past run from the audit trail.
+
+### 0.12.0
+
+- **Range-filter on your own event date.** `metadata_date_field` with
+  `metadata_date_after` / `metadata_date_before` on `kb.search(...)`,
+  `kb.list_entries(...)`, the `scope` of `kb.similar_pairs(...)` and the
+  search / expanded-search bodies ranges on an ISO-8601 timestamp you keep
+  under that metadata key (or dotted path, e.g. `email.sent_at`), for a
+  backfilled corpus whose `created_at` is only the import date. The service
+  parses the value: an offset is converted to UTC, a naive value is UTC, a
+  bare date is midnight UTC, anything else is out of the window. The field
+  needs at least one bound.
+- **`kb.cluster(scope=...)`**: cluster the newest `scope_limit` entries that
+  pass the list filters (`metadata_filters`, `source`, the time window, the
+  metadata-date window) without a query; the result's `scope["source"]` is
+  `"filtered"`. Mutually exclusive with `search`.
+
 ### 0.11.0
 
 - **Explorer Graph tab in 3D.** The tab now draws the bank with a three.js

@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import time
+
 from datetime import datetime
-from typing import Any, Literal, Mapping, Optional, Sequence
+from typing import Any, Callable, Literal, Mapping, Optional, Sequence
 
 from gurucloud_kb._http import HTTPClient
 from gurucloud_kb import _playbooks as _pb
 from gurucloud_kb._entries import build_entry_update
 from gurucloud_kb._playbooks import qs as _qs
+from gurucloud_kb._ask import continue_body as _ask_continue_body, execute_tool as _ask_execute_tool, start_body as _ask_start_body, tool_output_item as _ask_tool_output_item
 from gurucloud_kb._search import (
     apply_collapse,
     build_expanded_search,
@@ -52,6 +55,11 @@ from gurucloud_kb.types import (
     GraphLayout,
     GraphNeighborhood,
     StartLayout,
+    AskConfig,
+    AskRun,
+    AskRunDetail,
+    AskRunList,
+    AskStep,
     JudgePairsResult,
     MetadataFacets,
     SimilarPairsResult,
@@ -221,6 +229,9 @@ class KnowledgeBank:
         updated_before: str | datetime | None = None,
         event_after: str | datetime | None = None,
         event_before: str | datetime | None = None,
+        metadata_date_field: str | None = None,
+        metadata_date_after: str | datetime | None = None,
+        metadata_date_before: str | datetime | None = None,
     ) -> list[EntryResult]:
         """List entries, newest first, optionally narrowed by hard filters.
 
@@ -243,6 +254,13 @@ class KnowledgeBank:
             source: Exact match on the entry's ``source``.
             created_after, created_before, updated_after, updated_before,
             event_after, event_before: ISO-8601 or ``datetime`` bounds (UTC).
+            metadata_date_field, metadata_date_after, metadata_date_before:
+                Range on an ISO-8601 timestamp YOU keep in entry metadata
+                (``metadata_date_field="observed_at"``, a dotted path for a
+                nested key), for a backfilled corpus whose ``created_at`` is
+                only the import date. The field needs at least one bound;
+                an entry whose value is missing or not a timestamp is out of
+                the window.
         """
         return self._http.get(
             self._path("/entries"),
@@ -257,6 +275,9 @@ class KnowledgeBank:
                 updated_before=updated_before,
                 event_after=event_after,
                 event_before=event_before,
+                metadata_date_field=metadata_date_field,
+                metadata_date_after=metadata_date_after,
+                metadata_date_before=metadata_date_before,
             ),
         )
 
@@ -380,6 +401,9 @@ class KnowledgeBank:
         updated_before: str | datetime | None = None,
         event_after: str | datetime | None = None,
         event_before: str | datetime | None = None,
+        metadata_date_field: str | None = None,
+        metadata_date_after: str | datetime | None = None,
+        metadata_date_before: str | datetime | None = None,
         collapse: bool | Mapping[str, Any] | None = None,
     ) -> list[SearchResult]:
         """Semantic search across the KB.
@@ -422,6 +446,11 @@ class KnowledgeBank:
             event_after, event_before:
                 Like the above, but filter on the caller-supplied ``event_at``
                 (when the event/observation occurred) instead of ingest time.
+            metadata_date_field, metadata_date_after, metadata_date_before:
+                Range on an ISO-8601 timestamp YOU keep in entry metadata
+                (``metadata_date_field="observed_at"``), for a backfilled
+                corpus whose ``created_at`` is only the import date. For a
+                dict query set the same keys inside it.
             collapse: Fold results that are connected to each other (see
                 :meth:`connect`) into one representative each, with
                 ``related`` pointers ``{id, relation, direction, via,
@@ -447,6 +476,9 @@ class KnowledgeBank:
                 updated_before=updated_before,
                 event_after=event_after,
                 event_before=event_before,
+                metadata_date_field=metadata_date_field,
+                metadata_date_after=metadata_date_after,
+                metadata_date_before=metadata_date_before,
                 collapse=collapse,
             )
         else:
@@ -581,6 +613,7 @@ class KnowledgeBank:
         metric: str = "cosine",
         similarity_threshold: float = 0.85,
         search: SearchRequest | None = None,
+        scope: Mapping[str, Any] | None = None,
         scope_limit: int = 2000,
         include_members: bool = True,
         max_members_per_cluster: int = 10,
@@ -662,6 +695,15 @@ class KnowledgeBank:
             similarity_threshold: fuzzy match cutoff 0..1 (1.0 = exact).
             search: optional :class:`SearchRequest` to scope which entries are
                 clustered.
+            scope: optional hard filters, the same keys as
+                :meth:`list_entries` (``metadata_filters``, ``source``, the
+                time window, ``metadata_date_field`` + ``metadata_date_after``
+                / ``metadata_date_before``), to cluster the newest
+                ``scope_limit`` entries passing them WITHOUT a query, e.g.
+                ``scope={"metadata_date_field": "observed_at",
+                "metadata_date_after": "2024-01-01"}``. Mutually exclusive
+                with ``search`` (put the filters inside the search instead).
+                The result's ``scope["source"]`` is ``"filtered"``.
             scope_limit: max entries to cluster when no ``search`` is given.
             include_members: include member entries per cluster.
             max_members_per_cluster: cap members returned per cluster.
@@ -730,6 +772,8 @@ class KnowledgeBank:
             body["member_sample"] = member_sample
         if search is not None:
             body["search"] = normalize_search_request(search)
+        if scope:
+            body["scope"] = normalize_pair_scope(scope)
         return self._http.post(self._path("/cluster"), json=body)
 
     # ── similar pairs (beta) ─────────────────────────────────────
@@ -877,6 +921,85 @@ class KnowledgeBank:
         """
         return self._http.get(self._path("/graph"), params={"root": root, "depth": depth, "limit": limit})
 
+    # ── ask the bank step by step ──────────────────────────────────
+
+    def ask_config(self) -> AskConfig:
+        """What the Ask feature offers on this bank: the models, the limits,
+        the agent's tools and whether a model credential is available."""
+        return self._http.get(self._path("/ask/config"))
+
+    def ask_step(
+        self,
+        question: str | None = None,
+        *,
+        run_id: str | None = None,
+        previous_response_id: str | None = None,
+        tool_outputs: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+        max_steps: int | None = None,
+        requested_by: str | None = None,
+    ) -> AskStep:
+        """One model turn. Start a run with ``question``; continue it with the
+        ``run_id``, the previous turn's ``response_id`` as
+        ``previous_response_id`` and the ``tool_outputs`` you produced for its
+        ``tool_calls`` (see :meth:`ask`, which runs the whole loop)."""
+        if run_id:
+            body = _ask_continue_body(run_id, previous_response_id or "", tool_outputs or [])
+        else:
+            body = _ask_start_body(question or "", model=model, reasoning_effort=reasoning_effort, max_steps=max_steps, requested_by=requested_by)
+        return self._http.post(self._path("/ask/step"), json=body)
+
+    def ask(
+        self,
+        question: str,
+        *,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+        max_steps: int | None = None,
+        requested_by: str | None = None,
+        on_step: Callable[[AskStep], None] | None = None,
+    ) -> AskStep:
+        """Ask the bank a question and let a small model work it step by step:
+        it searches, reads entries, follows pointers and walks the graph
+        through this client, then answers with ``[id]`` citations::
+
+            final = kb.ask("How does the client quote a rush order?", on_step=print)
+            print(final["answer"], final["citations"])
+
+        ``on_step`` sees every turn as it lands (its ``thinking`` and
+        ``tool_calls``); the return value is the final turn (``status``
+        answered | step_limit | failed). Every turn is recorded on the service
+        (``list_ask_runs`` / ``get_ask_run``)."""
+        step = self.ask_step(question, model=model, reasoning_effort=reasoning_effort, max_steps=max_steps, requested_by=requested_by)
+        while True:
+            if on_step is not None:
+                on_step(step)
+            if step.get("status") != "tool_calls":
+                return step
+            outputs: list[dict[str, Any]] = []
+            for call in step.get("tool_calls", []):
+                started = time.monotonic()
+                try:
+                    out = _ask_execute_tool(str(call.get("name") or ""), call.get("arguments") or {}, search=self.search, get_entry=self.get_entry,
+                                            connections=self.connections, graph=self.graph)
+                    outputs.append(_ask_tool_output_item(call, out, duration_ms=(time.monotonic() - started) * 1000))
+                except Exception as exc:  # noqa: BLE001 - the model is told what failed and decides what to do
+                    outputs.append(_ask_tool_output_item(call, error=f"{type(exc).__name__}: {exc}", duration_ms=(time.monotonic() - started) * 1000))
+            step = self.ask_step(run_id=str(step.get("run_id") or ""), previous_response_id=step.get("response_id"), tool_outputs=outputs)
+
+    def list_ask_runs(self, *, limit: int = 20, offset: int = 0) -> AskRunList:
+        """Recent ask runs of this bank (the audit trail), newest first."""
+        return self._http.get(self._path("/ask/runs"), params={"limit": limit, "offset": offset})
+
+    def get_ask_run(self, run_id: str) -> AskRunDetail:
+        """One ask run with every recorded turn: the request sent, the raw response, thinking, tool calls."""
+        return self._http.get(self._path(f"/ask/runs/{run_id}"))
+
+    def abandon_ask_run(self, run_id: str) -> AskRun:
+        """Stop a running ask run (HTTP 409 once it has settled)."""
+        return self._http.post(self._path(f"/ask/runs/{run_id}/abandon"))
+
     def backfill_connections(
         self, *, dry_run: bool = True, max_entries: int = 50000, actor: str | None = None,
     ) -> ConnectionBackfillReport:
@@ -925,7 +1048,8 @@ class KnowledgeBank:
             max_entries: Entries scanned, newest first (default 2000).
             scope: Hard filters on the scanned entries, the same keys as
                 :meth:`list_entries` (``metadata_filters``, ``source``,
-                ``created_after`` ...).
+                ``created_after`` ..., ``metadata_date_field`` +
+                ``metadata_date_after`` / ``metadata_date_before``).
         """
         body: dict[str, Any] = {"threshold": threshold, "neighbors": neighbors, "limit": limit, "max_entries": max_entries}
         if field is not None:
@@ -1115,16 +1239,57 @@ class KnowledgeBank:
         """
         return self._http.get(self._path("/playbooks"), params=_pb.list_params(query, status, limit, min_score, genre))
 
+    def search_processes(
+        self, query: str, *, mode: Literal["auto", "person", "how"] = "auto", limit: int = 10
+    ) -> dict[str, Any]:
+        """Reverse search over the documented business processes.
+
+        A person or role (``"Jess"``, ``"the controller"``) returns every
+        process they are part of with the steps that are theirs (``roles``:
+        does / receives / mentioned); a situation (``"a delivery arrives
+        warm"``) returns the whole flows that describe it, matching steps
+        marked. ``mode="auto"`` picks person when every word of the query
+        names someone in the processes. Each result carries the full
+        ``steps`` list, the ``chain`` of people it passes through and the
+        ``matched_positions``.
+        """
+        return self._http.get(self._path("/process-search"), params={"q": query, "mode": mode, "limit": limit})
+
     def get_playbook_stats(self, *, genre: PlaybookGenre | None = None) -> PlaybookStats:
         """Playbook counts by status (``active`` / ``draft`` / ``superseded``),
         optionally for one ``genre`` only."""
         return self._http.get(self._path("/playbook-stats"), params=_pb.stats_params(genre))
 
-    def get_playbook(self, slug: str, *, include_linked_entries: bool = True) -> Playbook:
-        """Fetch one playbook whole: every step in order plus the entries its
-        steps cite (``linked_entries``). Raises :class:`NotFoundError` for an
-        unknown slug."""
-        return self._http.get(self._path(f"/playbooks/{slug}"), params=_pb.linked_params(include_linked_entries))
+    def get_playbook(
+        self,
+        slug: str,
+        *,
+        include_linked_entries: bool = True,
+        include_step_knowledge: bool = False,
+        related_top_k: int | None = None,
+        related_banks: list[str] | None = None,
+        related_full: bool = False,
+    ) -> Playbook:
+        """One playbook by slug: every step in order, linked entries inlined.
+
+        ``include_step_knowledge`` adds ``step_knowledge`` (keyed by step key,
+        else position): per step the entry it cites, the learnings tied to it
+        (edges and ``metadata.applies_at``) with full text and a breadcrumb, and
+        ``related_top_k`` semantic matches on the step text per bank (the
+        playbook's own bank plus ``related_banks``), summaries only unless
+        ``related_full``; ``knowledge`` says how it was assembled and which
+        bodies the size cap dropped (kb-platform >= 1.11.0).
+        """
+        return self._http.get(
+            self._path(f"/playbooks/{slug}"),
+            params=_pb.detail_params(
+                include_linked_entries,
+                include_step_knowledge=include_step_knowledge,
+                related_top_k=related_top_k,
+                related_banks=related_banks,
+                related_full=related_full,
+            ),
+        )
 
     def upsert_playbook(
         self,

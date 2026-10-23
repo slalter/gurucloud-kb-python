@@ -93,6 +93,29 @@ def linked_params(include_linked_entries: bool) -> dict[str, Any]:
     return {"include_linked_entries": "true" if include_linked_entries else "false"}
 
 
+def detail_params(
+    include_linked_entries: bool,
+    *,
+    include_step_knowledge: bool = False,
+    related_top_k: int | None = None,
+    related_banks: list[str] | None = None,
+    related_full: bool = False,
+) -> dict[str, Any]:
+    """Query for GET /playbooks/{slug}. The step-knowledge params travel only
+    when ``include_step_knowledge`` is on, so a plain read keeps its wire shape."""
+    params = linked_params(include_linked_entries)
+    if not include_step_knowledge:
+        return params
+    params["include_step_knowledge"] = "true"
+    if related_top_k is not None:
+        params["related_top_k"] = related_top_k
+    if related_banks:
+        params["related_banks"] = ",".join(b.strip() for b in related_banks if b.strip())
+    if related_full:
+        params["related_full"] = "true"
+    return params
+
+
 def start_run_body(
     subject: str | None, started_by: str | None, metadata: dict[str, Any] | None
 ) -> dict[str, Any]:

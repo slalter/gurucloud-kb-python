@@ -92,6 +92,21 @@ class TestSyncPlaybooks:
         assert [s["position"] for s in pb["steps"]] == [1, 2]
         assert dict(route.calls.last.request.url.params) == {"include_linked_entries": "false"}
 
+    def test_get_playbook_with_step_knowledge_sends_the_params(self, kb) -> None:
+        body = {**PLAYBOOK, "step_knowledge": {"1": {"linked": [], "cited_by": [], "related": [
+            {"id": "e-r", "bank": "shared", "bank_id": "kb-2", "relation": "related", "breadcrumb": "pm-sweep > 1 > r", "how_linked": "h", "summary": "r", "score": 0.7},
+        ]}}, "knowledge": {"banks": ["desk", "shared"], "related_top_k": 2, "related_full": False, "max_chars": 60000, "chars": 1, "truncated": False, "truncated_ids": [], "search_failures": []}}
+        route = respx.get(f"{API_PREFIX}/banks/kb-1/playbooks/pm-sweep").mock(return_value=httpx.Response(200, json={"data": body}))
+        pb = kb.get_playbook("pm-sweep", include_step_knowledge=True, related_top_k=2, related_banks=["shared", " other "])
+        assert pb["step_knowledge"]["1"]["related"][0]["bank"] == "shared" and pb["knowledge"]["banks"] == ["desk", "shared"]
+        assert dict(route.calls.last.request.url.params) == {
+            "include_linked_entries": "true", "include_step_knowledge": "true", "related_top_k": "2", "related_banks": "shared,other",
+        }
+        kb.get_playbook("pm-sweep", include_step_knowledge=True, related_full=True)
+        assert dict(route.calls.last.request.url.params) == {"include_linked_entries": "true", "include_step_knowledge": "true", "related_full": "true"}
+        kb.get_playbook("pm-sweep", related_top_k=5, related_banks=["shared"])  # ignored without the opt-in
+        assert dict(route.calls.last.request.url.params) == {"include_linked_entries": "true"}
+
     def test_get_playbook_not_found(self, kb) -> None:
         respx.get(f"{API_PREFIX}/banks/kb-1/playbooks/nope").mock(
             return_value=httpx.Response(404, json={"error": {"code": "playbook_not_found", "message": "No playbook"}})
@@ -313,3 +328,30 @@ class TestProcessGenre:
                 )
                 assert json.loads(put_route.calls.last.request.content)["genre"] == "process"
                 assert (res.get("playbook") or {}).get("genre") == "process"
+
+
+SEARCH = {"query": "Jess", "mode": "person", "terms": ["jess"], "people": ["Jess Okafor"], "results": [], "total_processes": 3}
+
+
+class TestProcessSearch:
+    def test_sync_sends_query_mode_and_limit(self, kb) -> None:
+        route = respx.get(f"{API_PREFIX}/banks/kb-1/process-search").mock(return_value=httpx.Response(200, json={"data": SEARCH}))
+        out = kb.search_processes("Jess", mode="person", limit=5)
+        assert out["people"] == ["Jess Okafor"]
+        assert dict(route.calls.last.request.url.params) == {"q": "Jess", "mode": "person", "limit": "5"}
+
+    def test_sync_defaults_to_auto(self, kb) -> None:
+        route = respx.get(f"{API_PREFIX}/banks/kb-1/process-search").mock(return_value=httpx.Response(200, json={"data": SEARCH}))
+        kb.search_processes("how do we handle a recall")
+        assert dict(route.calls.last.request.url.params) == {"q": "how do we handle a recall", "mode": "auto", "limit": "10"}
+
+    @pytest.mark.asyncio
+    async def test_async_mirror(self) -> None:
+        async with respx.mock:
+            _kb_route()
+            route = respx.get(f"{API_PREFIX}/banks/kb-1/process-search").mock(return_value=httpx.Response(200, json={"data": SEARCH}))
+            async with AsyncGuruCloudClient(api_key=API_KEY, base_url=BASE_URL) as client:
+                kb = await client.get_kb("kb-1")
+                out = await kb.search_processes("Jess", mode="how")
+            assert out["mode"] == "person"
+            assert dict(route.calls.last.request.url.params)["mode"] == "how"

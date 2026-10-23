@@ -40,6 +40,11 @@ class TestHelpers:
         assert normalize_pair_scope({"metadata_filters": {"kind": "rule"}, "created_after": since, "source": None}) == {
             "metadata_filters": {"kind": "rule"}, "created_after": since.isoformat()}
 
+    def test_scope_serializes_the_metadata_date_window(self) -> None:
+        since = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        assert normalize_pair_scope({"metadata_date_field": "observed_at", "metadata_date_after": since, "metadata_date_before": "2025-01-01"}) == {
+            "metadata_date_field": "observed_at", "metadata_date_after": since.isoformat(), "metadata_date_before": "2025-01-01"}
+
 
 class TestSync:
     @respx.mock

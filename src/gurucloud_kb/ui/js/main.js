@@ -11,28 +11,33 @@
                                                      (platform mode) and send it on
                                                      every API call
      ></div>
-   Panels: Entries · Map · Graph · Similar · Playbooks · Schema · Quality · History · Connect. */
+   Panels: Entries · Map · Graph · Ask · Similar · Playbooks · Process search · Schema · Quality · History · Connect. */
 
 import { h, mount, toast } from './dom.js';
 import { createApi } from './api.js';
 import { createEntriesView } from './entries.js';
 import { createMapView } from './map.js';
 import { createGraphView } from './graph.js';
+import { createAskView } from './ask.js';
 import { createSimilarView } from './similar.js';
 import { createPlaybooksView } from './playbooks.js';
+import { createProcessSearchView } from './process_search.js';
 import { createSchemaView } from './schema.js';
 import { createQualityView } from './quality.js';
 import { createEventsView } from './events.js';
 import { createConnectView } from './connect.js';
 import { getToken, tokenGate } from './token.js';
 import { tileValues } from './stats_view.js';
+import { initialPanel, modeChip, normalizeMode, ownsDocumentTitle, showsBackLink, showsBankDescription, visiblePanelIds } from './mode_model.js';
 
 const PANELS = [
   { id: 'entries', label: 'Entries', icon: 'bi-collection', make: createEntriesView },
   { id: 'map', label: 'Map', icon: 'bi-diagram-3', make: createMapView },
   { id: 'graph', label: 'Graph', icon: 'bi-share', make: createGraphView },
+  { id: 'ask', label: 'Ask', icon: 'bi-chat-dots', make: createAskView },
   { id: 'similar', label: 'Similar', icon: 'bi-intersect', make: createSimilarView },
   { id: 'playbooks', label: 'Playbooks', icon: 'bi-journal-text', make: createPlaybooksView },
+  { id: 'process-search', label: 'Process search', icon: 'bi-signpost-split', make: createProcessSearchView },
   { id: 'schema', label: 'Schema', icon: 'bi-diagram-2', make: createSchemaView },
   { id: 'quality', label: 'Quality', icon: 'bi-bullseye', make: createQualityView },
   { id: 'history', label: 'History', icon: 'bi-clock-history', make: createEventsView },
@@ -41,8 +46,10 @@ const PANELS = [
 
 export function bootExplorer(root) {
   const kbId = root.dataset.kbId;
-  const mode = root.dataset.mode || 'app';
-  const dashUrl = root.dataset.dashUrl || (mode === 'app' ? '/knowledgebank/dashboard' : null);
+  const mode = normalizeMode(root.dataset.mode);
+  const dashUrl = showsBackLink(mode) ? (root.dataset.dashUrl || '/knowledgebank/dashboard') : null;
+  const visibleIds = visiblePanelIds(mode);
+  const panels = visibleIds.map((id) => PANELS.find((p) => p.id === id)).filter(Boolean);
   const api = createApi(kbId, root.dataset.apiBase, { token: root.dataset.tokenGate ? getToken : null });
 
   let schema = null;
@@ -59,7 +66,8 @@ export function bootExplorer(root) {
 
   // ── header + stats ─────────────────────────────────────────────────────────
   const titleEl = h('h1', { class: 'kbx-h1' }, root.dataset.kbName || 'Knowledge Bank');
-  const subEl = h('p', { class: 'kbx-sub' }, root.dataset.kbDescription || '');
+  const subEl = h('p', { class: 'kbx-sub' }, showsBankDescription(mode) ? (root.dataset.kbDescription || '') : '');
+  if (!showsBankDescription(mode)) subEl.style.display = 'none';
   const tilesEl = h('div', { class: 'kbx-tiles', style: { marginBottom: '20px' } });
 
   const header = h('div', { class: 'kbx-header' },
@@ -70,7 +78,7 @@ export function bootExplorer(root) {
         titleEl, subEl)),
     h('div', { class: 'kbx-header-actions' },
       h('span', { class: 'kbx-chip muted kbx-mono', title: 'KB id' }, String(kbId).slice(0, 8)),
-      mode !== 'app' ? h('span', { class: 'kbx-chip muted' }, mode === 'sdk' ? 'gurucloud-kb ui' : 'KB platform') : null,
+      modeChip(mode) ? h('span', { class: 'kbx-chip muted' }, modeChip(mode)) : null,
       h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', onClick: () => location.reload() }, h('i', { class: 'bi bi-arrow-clockwise' }), 'Refresh')));
 
   // ── tabs + panels ──────────────────────────────────────────────────────────
@@ -79,7 +87,7 @@ export function bootExplorer(root) {
   const views = {};
   const panelEls = {};
 
-  PANELS.forEach((p) => {
+  panels.forEach((p) => {
     const tab = h('button', { class: 'kbx-tab', type: 'button', role: 'tab', dataset: { panel: p.id }, onClick: () => activate(p.id) }, h('i', { class: `bi ${p.icon}` }), p.label);
     tabsEl.append(tab);
     const panel = h('div', { class: 'kbx-panel', dataset: { panel: p.id } });
@@ -91,7 +99,8 @@ export function bootExplorer(root) {
     tabsEl.querySelectorAll('.kbx-tab').forEach((t) => t.classList.toggle('is-active', t.dataset.panel === id));
     Object.entries(panelEls).forEach(([pid, el]) => el.classList.toggle('is-active', pid === id));
     if (!views[id]) {
-      const def = PANELS.find((p) => p.id === id);
+      const def = panels.find((p) => p.id === id);
+      if (!def) return;
       const view = def.make(ctx);
       views[id] = view;
       mount(panelEls[id], view.el);
@@ -109,10 +118,10 @@ export function bootExplorer(root) {
     try {
       info = await api.info();
       if (info.name) titleEl.textContent = info.name;
-      if (info.description !== undefined) subEl.textContent = info.description || '';
+      if (info.description !== undefined && showsBankDescription(mode)) subEl.textContent = info.description || '';
       if (info.dimension_schema) schema = info.dimension_schema;
       else if (info.dimension_schema === undefined) schema = await api.getSchema().catch(() => null);
-      if (info.name) document.title = `${info.name} · KB Explorer`;
+      if (info.name && ownsDocumentTitle(mode)) document.title = `${info.name} · KB Explorer`;
       renderTiles(info, null);
       api.stats().then((s) => renderTiles(info, s)).catch(() => {});
     } catch (e) {
@@ -135,11 +144,11 @@ export function bootExplorer(root) {
 
   // ── go ─────────────────────────────────────────────────────────────────────
   renderTiles({}, null);
-  const initial = (location.hash || '').replace('#', '');
+  const initial = (location.hash || '').replace('#', '').split('?')[0];
   // Open the first tab only once the bank's schema is known: views build their
   // inputs from ctx.getSchema() on first load, and a custom-schema bank would
   // otherwise render the default dimensions (refreshInfo never rejects).
-  refreshInfo().then(() => activate(PANELS.some((p) => p.id === initial) ? initial : 'entries'));
+  refreshInfo().then(() => activate(initialPanel(mode, initial)));
   return ctx;
 }
 
