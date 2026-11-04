@@ -17,8 +17,8 @@ export function createPlaybooksView(ctx) {
 
   const statHost = h('div', { class: 'kbx-row', style: { gap: '8px' } });
   const genreHost = h('div', { class: 'kbx-filter-chips', dataset: { role: 'genre-filter' } });
-  const queryInput = h('input', { class: 'kbx-input', type: 'search', placeholder: 'Find a playbook by task, or a process by flow…' });
-  const statusSelect = h('select', { class: 'kbx-select', style: { width: 'auto' } },
+  const queryInput = h('input', { class: 'kbx-input', type: 'search', placeholder: 'Find a playbook by task, or a process by flow…', dataset: { action: 'playbooks_query', recordValue: 'query' } });
+  const statusSelect = h('select', { class: 'kbx-select', style: { width: 'auto' }, dataset: { action: 'playbooks_status', recordValue: 'status' } },
     h('option', { value: 'active' }, 'Active'),
     h('option', { value: 'draft' }, 'Draft'),
     h('option', { value: 'superseded' }, 'Superseded'),
@@ -29,13 +29,14 @@ export function createPlaybooksView(ctx) {
   statusSelect.addEventListener('change', loadList);
 
   const reload = () => { loadStats(); loadList(); };
-  const newBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', onClick: () => openPlaybookEditor(ctx, null, { onSaved: reload, genre: genre || undefined }) }, h('i', { class: 'bi bi-plus-lg' }), 'New');
+  const newBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', dataset: { action: 'playbooks_new_open', outcome: 'open' }, onClick: () => openPlaybookEditor(ctx, null, { onSaved: reload, genre: genre || undefined }) }, h('i', { class: 'bi bi-plus-lg' }), 'New');
 
   function renderGenreChips() {
     mount(genreHost, ...GENRE_FILTERS.map((g) => h('button', {
       class: `kbx-filter-chip${g.value === genre ? ' is-active' : ''}`,
       type: 'button',
-      dataset: { genre: g.value },
+      dataset: { genre: g.value, action: 'playbooks_genre', recordValue: 'genre' },
+      value: g.value || 'all',
       'aria-pressed': g.value === genre ? 'true' : 'false',
       onClick: () => { genre = g.value; renderGenreChips(); reload(); },
     }, g.label)));
@@ -51,7 +52,7 @@ export function createPlaybooksView(ctx) {
       h('div', { class: 'kbx-searchbar kbx-mt' },
         queryInput,
         h('div', { class: 'kbx-field', style: { marginBottom: 0 } }, statusSelect),
-        h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', onClick: loadList }, 'Search')),
+        h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { action: 'playbooks_search' }, onClick: loadList }, 'Search')),
       h('div', { class: 'kbx-mt-lg' }, listHost)));
 
   async function loadStats() {
@@ -88,7 +89,7 @@ export function createPlaybooksView(ctx) {
 
   function playbookRow(p) {
     const process = isProcess(p);
-    return h('div', { class: 'kbx-item', dataset: { slug: p.slug, genre: process ? 'process' : 'procedure' }, onClick: () => openPlaybookDetail(ctx, p.slug, { onChanged: reload }) },
+    return h('div', { class: 'kbx-item', dataset: { slug: p.slug, genre: process ? 'process' : 'procedure', action: process ? 'process_open' : 'playbook_open', targetSlug: p.slug, outcome: 'open' }, onClick: () => openPlaybookDetail(ctx, p.slug, { onChanged: reload }) },
       h('div', { class: 'kbx-item-head' },
         h('div', { class: 'kbx-item-title' }, p.title),
         h('div', { class: 'kbx-row', style: { gap: '6px' } },

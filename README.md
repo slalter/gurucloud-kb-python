@@ -1049,6 +1049,97 @@ edit the harness, they file a card.
 
 ## Changelog
 
+### 0.19.0
+
+- **Concurrency control on `upsert_playbook`** (gurucloudai kanban 25f2c388,
+  DEC request 5f5bd33c). `expected_version=<the version you read>` is a
+  compare-and-set: the service refuses with `PlaybookVersionConflictError`
+  (`live_version`, `changed_keys`) instead of overwriting a newer version;
+  `force` never bypasses it. `base_version=<the version you read>, merge=True`
+  asks the service to three-way merge your steps onto the live ones under its
+  row lock (step key is identity): a step changed on both sides raises
+  `PlaybookStepConflictError` (`conflicts`), a merge that changes nothing
+  answers `action="unchanged"` with no write, and a real merge reports what it
+  did under `merge` (`PlaybookMergeReport`). Needs a platform image >= 1.13.0.
+- **`playbook_diff(slug, from_version, to_version=None)`** (sync + async)
+  returns the `PlaybookDiff` between two versions of one playbook: header
+  changes, steps added / removed / changed (per field) and moved.
+
+### 0.18.0
+
+- **Entries render as markdown** (gurucloudai kanban 22519ae5). The Explorer's
+  entry detail renders `content` and `useful_for` through the new escape-first
+  `js/markdown_model.js` (headings, lists, fenced code, tables, blockquotes,
+  safe-scheme links; literal tags stay visible text) instead of a pre-wrapped
+  wall of text, and list cards, similar-pair cards and playbook step links
+  show a syntax-stripped preview. `report_learning` / `edit_kb_entry` now ask
+  agents to write markdown, so new learnings arrive structured.
+
+### 0.17.1
+
+- **Every search says who searched** (gurucloudai kanban b6ecacba). The
+  Explorer stamps `query_source` on each `POST /search`: `explorer` from the
+  Entries tab's search box, `explorer_graph` from the Graph tab's query box,
+  `explorer_ask` from the Ask tab's `search_knowledge_bank` tool. `kb.search()`
+  / `await kb.search()` take `query_source=` (a dict query's own key wins), and
+  `kb.ask()` labels its searches `sdk_ask`. Before this the bank's
+  `query_performance` rows from these callers landed with a NULL source and
+  could not be attributed.
+
+### 0.17.0
+
+- **The Ask agent's tools are the bank's MCP mount tools** (gurucloudai
+  kanban 38e21d4d). A run's tools are what an agent on the bank's MCP mount
+  sees (`query_knowledge_bank` with its collapse pointers and matched
+  playbooks, `get_kb_entry`, `list_playbooks` / `get_playbook`, the process
+  tools on a business bank; write tools never), and the Ask tab follows the
+  mount as it changes. The host runs those calls server-side: new
+  `kb.ask_execute(run_id, call_ids=None)` (`POST
+  /banks/{kb}/ask/runs/{id}/execute`) returns `{run_id, step, mount, outputs}`
+  and `kb.ask` posts the outputs on with the next step. The three pre-mount
+  tools (`search_knowledge_bank` / `read_entry` / `walk_graph`) still run
+  through the client, so runs recorded before the mount replay unchanged.
+  `ask_config()` reports the mount's `tools` and a `mount` descriptor;
+  `get_ask_run` carries the run's `tools` and `mount`. Citations may be
+  playbook slugs (`[door-refusal]`) as well as entry ids. Explorer: the Ask
+  tab paints `query_knowledge_bank` results as hits with their pointers,
+  `get_kb_entry` as read with its connections, a `get_playbook` read lists the
+  steps and lights the entries they cite, `get_kb_graph` as a walk; the
+  legend names the mount's tools. New types `AskExecute`, `AskToolOutput`.
+
+### 0.16.3
+
+- **Graph tab: the whole-bank picture draws every edge** (gurucloudai kanban
+  095e85e4). `MAX_BANK_EDGES` rises from 3,000 to 20,000, so a bank with
+  3,630 connections is no longer truncated, and `loadBankEdges` fetches the
+  `GET /edges` pages four at a time (kept in offset order, an edge repeated
+  by a shifting offset kept once) instead of one after another.
+
+### 0.16.2
+
+- **Ask tab: short bracketed citations become chips** (gurucloudai kanban
+  82418401). `citationSegments` now resolves a bracketed id prefix of 4 or
+  more characters (`[1585b1c]`) when it matches exactly one known entry; it
+  needed 8 before, so an answer whose model drifted to 7-character ids showed
+  no chips. Bare hex words still need 8+ characters and a digit. The KB
+  service's `extract_citations` applies the same rule, so the run's audit
+  row records those citations too.
+
+### 0.16.1
+
+- **Explorer controls carry stable user-action names** (gurucloudai kanban
+  812c0da2). Every button, tab, select, checkbox, date and search control in
+  the Explorer bundle now has a `data-action` name (`tab_<panel>`,
+  `<panel>_<verb>[_<object>]`), the ids it acts on as `data-target-*`
+  (`entry_id`, `slug`, `version`, ...) and the value it records as
+  `data-record-value`, so a host that loads the Guru user-action recorder
+  (the hosted app's `/knowledgebank/<kb>/explore`) records one audit row per
+  action with a stable name. The Process search tab also records one
+  `psearch_run {mode, query}` row per search the person ran (Enter included)
+  through the new `js/record.js` bridge, which is a no-op on the SDK's local
+  server and the self-hosted platform `/ui`, where no recorder is loaded.
+  Node coverage: `tests/test_kb_explorer_recorder_names.js`.
+
 ### 0.16.0
 
 - **modreg scan: src-layout repositories resolve Python imports** (kanban

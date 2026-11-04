@@ -117,3 +117,54 @@ class PlaybookOverlapError(APIError):
         self.threshold: float | None = details.get("threshold")
         self.candidates: list[dict] = list(details.get("candidates") or [])
         super().__init__(409, "playbook_overlap", message)
+
+
+class PlaybookVersionConflictError(APIError):
+    """Raised on 409 ``version_conflict``: you passed ``expected_version`` (or
+    a ``base_version`` the bank has no snapshot for) and the stored playbook
+    is not at that version. Nothing was written.
+
+    Attributes:
+        slug: the slug you tried to write.
+        expected_version: the version you said you read.
+        live_version: the version the bank holds now (``None`` when the slug
+            does not exist).
+        changed_keys: step keys changed, added or removed between the two.
+
+    Resolve by reading the playbook again (``playbook_diff(slug,
+    expected_version, live_version)`` shows what moved), re-applying your
+    edit and writing with ``expected_version=live_version``, or by passing
+    ``base_version=<what you read>, merge=True`` so the service merges
+    disjoint step edits for you.
+    """
+
+    def __init__(self, message: str, details: dict | None = None) -> None:
+        details = details or {}
+        self.slug: str | None = details.get("slug")
+        self.expected_version: int | None = details.get("expected_version")
+        self.live_version: int | None = details.get("live_version")
+        self.changed_keys: list[str] = list(details.get("changed_keys") or [])
+        super().__init__(409, "version_conflict", message)
+
+
+class PlaybookStepConflictError(APIError):
+    """Raised on 409 ``step_conflict``: a ``base_version`` merge found a step
+    changed both by you and since ``base_version`` (or the merged list would
+    not be a sound playbook). Nothing was written.
+
+    Attributes:
+        slug, base_version, live_version.
+        conflicts: the step keys changed on both sides (empty when the merged
+            graph itself was unsound; see ``message``).
+
+    Resolve by re-deriving your edit from ``live_version`` and writing again
+    with ``base_version=live_version, merge=True``.
+    """
+
+    def __init__(self, message: str, details: dict | None = None) -> None:
+        details = details or {}
+        self.slug: str | None = details.get("slug")
+        self.base_version: int | None = details.get("base_version")
+        self.live_version: int | None = details.get("live_version")
+        self.conflicts: list[str] = list(details.get("conflicts") or [])
+        super().__init__(409, "step_conflict", message)

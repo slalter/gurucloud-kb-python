@@ -287,6 +287,35 @@
 .kbx-kv dt { color: var(--kbx-muted); font-weight: 550; }
 .kbx-kv dd { margin: 0; color: var(--kbx-heading); overflow-wrap: anywhere; }
 
+/* ── Rendered markdown (entry content / useful_for; js/markdown_model.js) ── */
+.kbx-md { color: var(--kbx-heading); font-size: var(--mk-para-s-size); line-height: 1.55; overflow-wrap: anywhere; }
+.kbx-md > :first-child { margin-top: 0; }
+.kbx-md > :last-child { margin-bottom: 0; }
+.kbx-md p { margin: 0 0 10px; }
+.kbx-md h1, .kbx-md h2, .kbx-md h3, .kbx-md h4, .kbx-md h5, .kbx-md h6 {
+  color: var(--kbx-heading); font-weight: 650; line-height: 1.3; margin: 16px 0 6px;
+}
+.kbx-md h1 { font-size: 17px; }
+.kbx-md h2 { font-size: 15.5px; }
+.kbx-md h3 { font-size: 14.5px; }
+.kbx-md h4, .kbx-md h5, .kbx-md h6 { font-size: 14px; color: var(--kbx-muted); text-transform: uppercase; letter-spacing: .02em; }
+.kbx-md ul, .kbx-md ol { margin: 0 0 10px; padding-left: 22px; }
+.kbx-md li { margin: 3px 0; }
+.kbx-md li > ul, .kbx-md li > ol { margin: 3px 0 0; }
+.kbx-md code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px;
+  background: #f4f2ec; border: 1px solid var(--kbx-border); border-radius: 4px; padding: 1px 5px; }
+.kbx-md pre.kbx-code { margin: 0 0 10px; white-space: pre-wrap; }
+.kbx-md pre.kbx-code code { background: none; border: 0; padding: 0; font-size: inherit; }
+.kbx-md blockquote { margin: 0 0 10px; padding: 4px 12px; border-left: 3px solid var(--kbx-primary); color: var(--kbx-body); background: var(--kbx-surface-2); border-radius: 0 var(--kbx-radius-sm) var(--kbx-radius-sm) 0; }
+.kbx-md blockquote p:last-child { margin-bottom: 0; }
+.kbx-md hr { border: 0; border-top: 1px solid var(--kbx-border); margin: 12px 0; }
+.kbx-md table { border-collapse: collapse; margin: 0 0 10px; font-size: 13px; width: auto; max-width: 100%; display: block; overflow-x: auto; }
+.kbx-md th, .kbx-md td { border: 1px solid var(--kbx-border); padding: 4px 8px; text-align: left; vertical-align: top; }
+.kbx-md th { background: var(--kbx-surface-2); font-weight: 600; }
+.kbx-md a { color: var(--kbx-primary); text-decoration: underline; text-underline-offset: 2px; }
+.kbx-md a:hover { color: var(--kbx-primary-hover); }
+.kbx-md strong { font-weight: 650; }
+
 /* ── Steps (playbooks) ───────────────────────────────────────────────────── */
 .kbx-steps { list-style: none; margin: 0; padding: 0; counter-reset: kbxstep; }
 .kbx-step { display: flex; gap: var(--mk-space-md); padding: var(--mk-space-md) 0; border-bottom: 1px dashed var(--kbx-border); }

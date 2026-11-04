@@ -7,9 +7,17 @@
 
    Data roles for E2E: psearch-query, psearch-search, psearch-mode,
    psearch-headline, psearch-switch, psearch-person, psearch-result,
-   psearch-answer, psearch-cast-name. */
+   psearch-answer, psearch-cast-name.
+
+   Recorded actions (data-action, kanban 812c0da2): psearch_query (the typed
+   term), psearch_search (the button), psearch_mode {mode}, psearch_pill
+   {person} (a matched person or a cast name), psearch_switch {mode},
+   psearch_more, psearch_open_process (target slug); plus one psearch_run
+   {mode, query} row per search that actually ran, recorded here because Enter
+   in the search box is invisible to the recorder's click listener. */
 
 import { h, mount, skeleton, empty, timeAgo } from './dom.js';
+import { recordAction } from './record.js';
 import { openPlaybookDetail } from './playbook_detail.js';
 import {
   SEARCH_MODES, PLACEHOLDERS, PAGE, PAGE_MAX, roleSentence, matchedTitles, matchSentence, castShown,
@@ -23,7 +31,7 @@ export function createProcessSearchView(ctx) {
   let seq = 0;         // only the newest search may render
   let current = null;  // { q, mode, limit } of the search on screen, for re-runs after an edit
 
-  const input = h('input', { class: 'kbx-input', type: 'search', dataset: { role: 'psearch-query' }, placeholder: PLACEHOLDERS.auto, 'aria-label': 'Search processes' });
+  const input = h('input', { class: 'kbx-input', type: 'search', dataset: { role: 'psearch-query', action: 'psearch_query', recordValue: 'query' }, placeholder: PLACEHOLDERS.auto, 'aria-label': 'Search processes' });
   const modeHost = h('div', { class: 'kbx-filter-chips', role: 'group', 'aria-label': 'Search for' });
   const resultHost = h('div', {});
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') run(input.value); });
@@ -33,7 +41,8 @@ export function createProcessSearchView(ctx) {
     mount(modeHost, ...SEARCH_MODES.map((m) => h('button', {
       class: `kbx-filter-chip${m.value === mode ? ' is-active' : ''}`,
       type: 'button',
-      dataset: { role: 'psearch-mode', mode: m.value },
+      dataset: { role: 'psearch-mode', mode: m.value, action: 'psearch_mode', recordValue: 'mode' },
+      value: m.value,
       'aria-pressed': m.value === mode ? 'true' : 'false',
       onClick: () => { setMode(m.value); if (input.value.trim()) run(input.value); },
     }, m.label)));
@@ -49,7 +58,7 @@ export function createProcessSearchView(ctx) {
       modeHost,
       h('div', { class: 'kbx-searchbar kbx-mt' },
         input,
-        h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { role: 'psearch-search' }, onClick: () => run(input.value) }, 'Search')),
+        h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { role: 'psearch-search', action: 'psearch_search' }, onClick: () => run(input.value) }, 'Search')),
       h('div', { class: 'kbx-mt-lg' }, resultHost)));
 
   function reset(updateHash) {
@@ -60,12 +69,14 @@ export function createProcessSearchView(ctx) {
   }
   reset(false);
 
-  async function run(query, { mode: override, push = true, limit = PAGE, scrollTo = false } = {}) {
+  async function run(query, { mode: override, push = true, limit = PAGE, scrollTo = false, record = true } = {}) {
     const q = String(query || '').trim();
     if (!q) return;
     if (override && override !== mode) setMode(override);
     const useMode = mode;
     input.value = q;
+    // One row per search the person ran (Back/hash restores pass record: false).
+    if (record) recordAction('psearch_run', { values: { mode: useMode, query: q }, outcome: 'request' });
     const mine = ++seq;
     mount(resultHost, skeleton('Searching processes…'));
     try {
@@ -95,11 +106,11 @@ export function createProcessSearchView(ctx) {
       head.strong ? h('strong', {}, head.strong) : null,
       head.rest,
       head.note ? h('span', { class: 'kbx-muted' }, ` · ${head.note}`) : null,
-      canShowMore ? h('button', { class: 'kbx-link-btn', type: 'button', dataset: { role: 'psearch-more' }, onClick: () => run(data.query, { push: false, limit: PAGE_MAX }) }, total <= PAGE_MAX ? `show all ${total}` : `show the first ${PAGE_MAX}`) : null,
-      hint ? h('button', { class: 'kbx-link-btn', type: 'button', dataset: { role: 'psearch-switch', mode: hint.mode }, onClick: () => run(data.query, { mode: hint.mode }) }, hint.label) : null);
+      canShowMore ? h('button', { class: 'kbx-link-btn', type: 'button', dataset: { role: 'psearch-more', action: 'psearch_more' }, onClick: () => run(data.query, { push: false, limit: PAGE_MAX }) }, total <= PAGE_MAX ? `show all ${total}` : `show the first ${PAGE_MAX}`) : null,
+      hint ? h('button', { class: 'kbx-link-btn', type: 'button', dataset: { role: 'psearch-switch', mode: hint.mode, action: 'psearch_switch', recordValue: 'mode' }, value: hint.mode, onClick: () => run(data.query, { mode: hint.mode }) }, hint.label) : null);
     const pickPerson = data.mode === 'person' && people.length > 1
       ? h('div', { class: 'kbx-filter-chips', role: 'group', 'aria-label': 'People matched' },
-          ...people.map((name) => h('button', { class: 'kbx-filter-chip', type: 'button', dataset: { role: 'psearch-person' }, onClick: () => run(name, { mode: 'person', scrollTo: true }) }, name)))
+          ...people.map((name) => h('button', { class: 'kbx-filter-chip', type: 'button', dataset: { role: 'psearch-person', action: 'psearch_pill', recordValue: 'person' }, value: name, onClick: () => run(name, { mode: 'person', scrollTo: true }) }, name)))
       : null;
     if (!results.length) {
       mount(resultHost, headline, h('p', { class: 'kbx-muted kbx-psearch-hint' }, data.mode === 'person'
@@ -116,7 +127,7 @@ export function createProcessSearchView(ctx) {
     const open = () => openPlaybookDetail(ctx, hit.slug, { onChanged: rerun, highlight: hit.matched_positions || [] });
     const fit = fitText(hit, resultMode);
     const n = hit.step_count || (hit.steps || []).length;
-    return h('div', { class: 'kbx-item', dataset: { role: 'psearch-result', slug: hit.slug }, role: 'button', tabindex: '0', onClick: open, onKeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } } },
+    return h('div', { class: 'kbx-item', dataset: { role: 'psearch-result', slug: hit.slug, action: 'psearch_open_process', targetSlug: hit.slug, outcome: 'open' }, role: 'button', tabindex: '0', onClick: open, onKeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } } },
       h('div', { class: 'kbx-item-head' },
         h('div', { class: 'kbx-item-title' }, hit.title),
         fit ? h('span', { class: 'kbx-chip', title: 'How closely this process’s description matches your words' }, fit) : null),
@@ -150,7 +161,8 @@ export function createProcessSearchView(ctx) {
         h('button', {
           class: `kbx-cast-name${m.highlight ? ' is-hit' : ''}`,
           type: 'button',
-          dataset: { role: 'psearch-cast-name' },
+          dataset: { role: 'psearch-cast-name', action: 'psearch_pill', recordValue: 'person', targetSlug: hit.slug },
+          value: m.name,
           title: `Every process ${m.name} is part of`,
           onClick: (e) => { e.stopPropagation(); run(m.name, { mode: 'person', scrollTo: true }); },
         }, m.name),
@@ -166,7 +178,7 @@ export function createProcessSearchView(ctx) {
     if (!state) return;
     if (state.q) {
       setMode(state.mode);
-      run(state.q, { push: false });
+      run(state.q, { push: false, record: false });
     } else {
       input.value = '';
       reset(false);

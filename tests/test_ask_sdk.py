@@ -102,7 +102,8 @@ class TestShapers:
         calls: list[Any] = []
         out = _ask.execute_tool(_ask.TOOL_SEARCH, {"query": "rush", "k": 3}, search=lambda q, **kw: calls.append(("search", q, kw)) or SEARCH_RESP,
                                 get_entry=lambda i: ENTRY, connections=lambda i: CONNS, graph=lambda r, **kw: GRAPH)
-        assert out["results"][0]["id"] == A and calls == [("search", "rush", {"k": 3, "threshold": 0.0, "collapse": True})]
+        assert out["results"][0]["id"] == A and calls == [("search", "rush", {"k": 3, "threshold": 0.0, "collapse": True, "query_source": "sdk_ask"})]
+        assert _ask.QUERY_SOURCE == "sdk_ask" and len(_ask.QUERY_SOURCE) <= 50
         out = _ask.execute_tool(_ask.TOOL_READ, {"entry_id": "bbbbbbbb"}, search=lambda q, **kw: None, get_entry=lambda i: ENTRY,
                                 connections=lambda i: (_ for _ in ()).throw(RuntimeError("down")), graph=lambda r, **kw: GRAPH)
         assert out["id"] == B and out["connections"] == [], "a failing connections read still returns the entry"
@@ -118,7 +119,72 @@ class TestShapers:
         assert _ask.tool_output_item({"call_id": "c1", "name": "x"}, error="boom")["output"] is None
 
 
+MOUNT_TOOLS_STEP = _step(1, "tool_calls", tool_calls=[
+    {"call_id": "q1", "name": "query_knowledge_bank", "arguments": {"content_query": "door refusal"}},
+    {"call_id": "r1", "name": _ask.TOOL_READ, "arguments": {"entry_id": "bbbbbbbb"}},
+    {"call_id": "p1", "name": "get_playbook", "arguments": {"slug": "door-refusal"}},
+    {"call_id": "x1", "name": "report_learning", "arguments": {}, "known": False},
+])
+EXECUTED = {"run_id": "run-1", "step": 1, "mount": {"kind": "hosted", "server_id": "s1"}, "outputs": [
+    {"call_id": "q1", "name": "query_knowledge_bank", "output": {"results": [{"id": A, "content": "x"}], "matched_playbooks": [{"slug": "door-refusal"}]}, "duration_ms": 120.0},
+    {"call_id": "p1", "name": "get_playbook", "output": None, "error": "playbook_not_found: no such playbook", "duration_ms": 5.0},
+]}
+
+
+class TestMountHelpers:
+    def test_split_calls_keeps_legacy_and_unknown_tools_for_the_client(self) -> None:
+        mine, mount = _ask.split_calls(MOUNT_TOOLS_STEP["tool_calls"])
+        assert [c["call_id"] for c in mine] == ["r1", "x1"] and [c["call_id"] for c in mount] == ["q1", "p1"]
+        assert _ask.is_legacy_tool(_ask.TOOL_WALK) and not _ask.is_legacy_tool("get_kb_entry")
+        assert _ask.execute_body(None) == {} and _ask.execute_body([]) == {} and _ask.execute_body(["q1"]) == {"call_ids": ["q1"]}
+
+    def test_merge_outputs_keeps_call_order_and_fills_gaps(self) -> None:
+        mine = [_ask.tool_output_item({"call_id": "r1", "name": _ask.TOOL_READ}, {"id": B}, duration_ms=3.0), _ask.tool_output_item({"call_id": "x1", "name": "report_learning"}, error="unknown tool")]
+        merged = _ask.merge_outputs(MOUNT_TOOLS_STEP["tool_calls"], mine, EXECUTED)
+        assert [o["call_id"] for o in merged] == ["q1", "r1", "p1", "x1"]
+        assert merged[0]["output"]["results"][0]["id"] == A and merged[0]["duration_ms"] == 120.0 and "mount" not in merged[0]
+        assert merged[1]["output"] == {"id": B} and merged[2]["error"].startswith("playbook_not_found") and merged[2]["output"] is None and merged[3]["error"] == "unknown tool"
+        short = _ask.merge_outputs(MOUNT_TOOLS_STEP["tool_calls"], mine, {"outputs": [EXECUTED["outputs"][0]]})
+        assert short[2]["error"] == "the mount returned no output for this call" and short[2]["call_id"] == "p1", "a call the host skipped never stalls the step"
+        assert _ask.merge_outputs(MOUNT_TOOLS_STEP["tool_calls"][:1], [], None)[0]["error"].startswith("the mount returned no output")
+
+
 class TestSync:
+    @respx.mock
+    def test_ask_runs_mount_tools_on_the_host_and_legacy_tools_itself(self) -> None:
+        steps = iter([MOUNT_TOOLS_STEP, _step(2, "answered", answer=f"Follow [door-refusal]; see [{A[:8]}].", citations=[A, "door-refusal"])])
+        step_route = respx.post(f"{API_PREFIX}/banks/kb-1/ask/step").mock(side_effect=lambda req: httpx.Response(200, json={"data": next(steps)}))
+        exec_route = respx.post(f"{API_PREFIX}/banks/kb-1/ask/runs/run-1/execute").mock(return_value=httpx.Response(200, json={"data": EXECUTED}))
+        respx.get(f"{API_PREFIX}/banks/kb-1/entries/bbbbbbbb").mock(return_value=httpx.Response(200, json={"data": ENTRY}))
+        respx.get(f"{API_PREFIX}/banks/kb-1/entries/{B}/edges").mock(return_value=httpx.Response(200, json={"data": CONNS}))
+        final: Any = _kb().ask("door refusal?")
+        assert final["status"] == "answered" and final["citations"] == [A, "door-refusal"]
+        assert json.loads(exec_route.calls[0].request.content) == {"call_ids": ["q1", "p1"]}, "only the mount's calls go to the host"
+        outputs = json.loads(step_route.calls[1].request.content)["tool_outputs"]
+        assert [o["call_id"] for o in outputs] == ["q1", "r1", "p1", "x1"]
+        assert outputs[0]["output"]["matched_playbooks"][0]["slug"] == "door-refusal" and outputs[1]["output"]["id"] == B
+        assert outputs[2]["error"].startswith("playbook_not_found") and "unknown tool" in outputs[3]["error"]
+
+    @respx.mock
+    def test_a_failed_execute_call_tells_every_mount_call_why(self) -> None:
+        steps = iter([MOUNT_TOOLS_STEP, _step(2, "answered", answer="done")])
+        step_route = respx.post(f"{API_PREFIX}/banks/kb-1/ask/step").mock(side_effect=lambda req: httpx.Response(200, json={"data": next(steps)}))
+        respx.post(f"{API_PREFIX}/banks/kb-1/ask/runs/run-1/execute").mock(return_value=httpx.Response(503, json={"error": {"code": "mount_unavailable", "message": "mount gone"}}))
+        respx.get(f"{API_PREFIX}/banks/kb-1/entries/bbbbbbbb").mock(return_value=httpx.Response(200, json={"data": ENTRY}))
+        respx.get(f"{API_PREFIX}/banks/kb-1/entries/{B}/edges").mock(return_value=httpx.Response(200, json={"data": CONNS}))
+        _kb().ask("q")
+        outputs = json.loads(step_route.calls[1].request.content)["tool_outputs"]
+        assert outputs[0]["error"].startswith("the mount did not run this call") and outputs[2]["error"].startswith("the mount did not run this call") and outputs[1]["output"]["id"] == B
+
+    @respx.mock
+    def test_ask_execute_posts_the_call_ids(self) -> None:
+        route = respx.post(f"{API_PREFIX}/banks/kb-1/ask/runs/run-1/execute").mock(return_value=httpx.Response(200, json={"data": EXECUTED}))
+        kb = _kb()
+        out: Any = kb.ask_execute("run-1", call_ids=["q1"])
+        assert out["mount"]["kind"] == "hosted" and json.loads(route.calls[0].request.content) == {"call_ids": ["q1"]}
+        kb.ask_execute("run-1")
+        assert json.loads(route.calls[1].request.content) == {}
+
     @respx.mock
     def test_ask_runs_the_loop_and_posts_tool_outputs(self) -> None:
         steps = iter([
@@ -204,3 +270,24 @@ class TestAsync:
         outputs = json.loads(step_route.calls[1].request.content)["tool_outputs"]
         assert outputs[0]["output"]["results"][0]["id"] == A
         assert outputs[1]["output"]["id"] == B and outputs[1]["output"]["connections"] == [], "a failing edges read still returns the entry"
+
+    @respx.mock
+    def test_async_ask_runs_mount_tools_on_the_host(self) -> None:
+        steps = iter([MOUNT_TOOLS_STEP, _step(2, "answered", answer="done", citations=["door-refusal"])])
+        step_route = respx.post(f"{API_PREFIX}/banks/kb-1/ask/step").mock(side_effect=lambda req: httpx.Response(200, json={"data": next(steps)}))
+        exec_route = respx.post(f"{API_PREFIX}/banks/kb-1/ask/runs/run-1/execute").mock(return_value=httpx.Response(200, json={"data": EXECUTED}))
+        respx.get(f"{API_PREFIX}/banks/kb-1/entries/bbbbbbbb").mock(return_value=httpx.Response(200, json={"data": ENTRY}))
+        respx.get(f"{API_PREFIX}/banks/kb-1/entries/{B}/edges").mock(return_value=httpx.Response(200, json={"data": CONNS}))
+        respx.get(f"{API_PREFIX}/banks/kb-1").mock(return_value=httpx.Response(200, json={"data": KB_INFO}))
+
+        async def go() -> Any:
+            kb = await AsyncGuruCloudClient(api_key=API_KEY, base_url=BASE_URL).get_kb("kb-1")
+            final = await kb.ask("door refusal?")
+            direct = await kb.ask_execute("run-1", call_ids=["q1"])
+            return final, direct
+
+        final, direct = asyncio.run(go())
+        assert final["citations"] == ["door-refusal"] and direct["mount"]["kind"] == "hosted"
+        assert json.loads(exec_route.calls[0].request.content) == {"call_ids": ["q1", "p1"]}
+        outputs = json.loads(step_route.calls[1].request.content)["tool_outputs"]
+        assert [o["call_id"] for o in outputs] == ["q1", "r1", "p1", "x1"] and outputs[1]["output"]["id"] == B

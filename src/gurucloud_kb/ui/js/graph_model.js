@@ -28,7 +28,14 @@ export const RELATION_COLORS = {
 };
 
 export const DEFAULTS = Object.freeze({ k: 8, collapse: true, maxNeighbors: 3, threshold: 0, context: false, view: 'bank' });
-export const MAX_BANK_EDGES = 3000;
+
+/** `query_source` labels the Explorer stamps on every POST /search so each
+    query_performance row says which surface searched (kb_service/models.py
+    lists every label; NULL rows are unattributable). One label per caller:
+    the Entries tab's search box, the Graph tab's query box, the Ask tab's
+    search_knowledge_bank tool. */
+export const QUERY_SOURCES = Object.freeze({ entries: 'explorer', graph: 'explorer_graph', ask: 'explorer_ask' });
+export const MAX_BANK_EDGES = 20000;
 const LABEL_LEN = 64;
 const DOT_MIN = 6;
 const DOT_MAX = 16;
@@ -57,15 +64,22 @@ export function normalizeOptions(o = {}) {
 
 /** POST /search body for the Graph tab's query box: the bank's primary
     semantic dimension carries the text; `collapse` is sent only when on
-    (null/absent keeps the flat ranking). */
-export function searchPayload({ schema, query, ...opts }) {
+    (null/absent keeps the flat ranking). `querySource` names the calling
+    surface (QUERY_SOURCES; the Graph tab by default). */
+export function searchPayload({ schema, query, querySource, ...opts }) {
   const q = String(query || '').trim();
   if (!q) throw new Error('Type a query first');
   const o = normalizeOptions(opts);
   const dim = primaryDim(schema) || 'content';
-  const payload = { dimensions: { [dim]: { query_text: q } }, k: o.k, threshold: o.threshold, combination_mode: 'weighted_sum' };
+  const payload = { dimensions: { [dim]: { query_text: q } }, k: o.k, threshold: o.threshold, combination_mode: 'weighted_sum', query_source: querySource || QUERY_SOURCES.graph };
   if (o.collapse) payload.collapse = { max_neighbors: o.maxNeighbors };
   return payload;
+}
+
+/** POST /search body for the Entries tab's search box: the typed per-dimension
+    queries plus the Filters panel's hard filters, labelled QUERY_SOURCES.entries. */
+export function entriesSearchPayload({ dimensions, k, threshold, combinationMode, filters }) {
+  return { dimensions, k, threshold, combination_mode: combinationMode, ...(filters || {}), query_source: QUERY_SOURCES.entries };
 }
 
 /** The search response's result list, whatever envelope the host used. */

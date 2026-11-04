@@ -13,6 +13,7 @@ import { h, mount, clear, toast, skeleton, empty, fmtDate, timeAgo, meter } from
 import { openEntryDetail, kindChip } from './entry_detail.js';
 import { confirmModal } from './modal.js';
 import { dimsOf, kindOf, truncate } from './schema_utils.js';
+import { markdownToText } from './markdown_model.js';
 import {
   ACTION_LABEL, DEFAULT_JUDGE_BATCH, KIND_LABEL, KIND_TONE, SCAN_SIZES, VERDICT_LABEL, VERDICT_TONE, applyResultText, attachJudgements,
   buildApplyRequest, buildJudgeRequest, buildPairsRequest, changeSummary, editLines, filterPairs, judgeFailureText, markPair, nextToJudge, pairKey,
@@ -36,18 +37,18 @@ export function createSimilarView(ctx) {
   const settings = readSettings(storage(), api.kbId);
 
   // ── controls ───────────────────────────────────────────────────────────────
-  const fieldSelect = h('select', { class: 'kbx-select', dataset: { role: 'similar-field' } });
+  const fieldSelect = h('select', { class: 'kbx-select', dataset: { role: 'similar-field', action: 'similar_field', recordValue: 'field' } });
   const thresholdInput = h('input', { class: 'kbx-input', type: 'number', min: '0.5', max: '1', step: '0.01', value: String(settings.threshold), dataset: { role: 'similar-threshold' } });
-  const scanSelect = h('select', { class: 'kbx-select', dataset: { role: 'similar-scan' } },
+  const scanSelect = h('select', { class: 'kbx-select', dataset: { role: 'similar-scan', action: 'similar_scan_scope', recordValue: 'scan' } },
     ...SCAN_SIZES.map((n) => h('option', { value: String(n) }, n >= 20000 ? 'Whole bank (slow)' : `Newest ${n.toLocaleString()}`)));
   scanSelect.value = String(settings.maxEntries);
-  const speedSelect = h('select', { class: 'kbx-select', dataset: { role: 'similar-speed' }, title: 'Which model judges. Thorough reasons a little; Fast answers in about a second. The scan names the platform defaults; a stored credential with a default model overrides them.' },
+  const speedSelect = h('select', { class: 'kbx-select', dataset: { role: 'similar-speed', action: 'similar_speed', recordValue: 'speed' }, title: 'Which model judges. Thorough reasons a little; Fast answers in about a second. The scan names the platform defaults; a stored credential with a default model overrides them.' },
     h('option', { value: 'thorough' }, 'Thorough'), h('option', { value: 'fast' }, 'Fast'));
   function labelSpeeds(models) {
     [...speedSelect.options].forEach((o) => { o.textContent = speedLabel(o.value, models); });
   }
-  const scanBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', onClick: runScan }, h('i', { class: 'bi bi-intersect' }), 'Find similar pairs');
-  const judgeTopBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { role: 'judge-top' }, onClick: () => judge(nextToJudge(pairs, DEFAULT_JUDGE_BATCH)) },
+  const scanBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', dataset: { action: 'similar_scan', outcome: 'request' }, onClick: runScan }, h('i', { class: 'bi bi-intersect' }), 'Find similar pairs');
+  const judgeTopBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { role: 'judge-top', action: 'similar_judge_top', outcome: 'request' }, onClick: () => judge(nextToJudge(pairs, DEFAULT_JUDGE_BATCH)) },
     h('i', { class: 'bi bi-stars' }), `Judge next ${DEFAULT_JUDGE_BATCH}`);
   const judgeStatus = h('div', { class: 'kbx-muted', style: { fontSize: '12px' } });
 
@@ -188,7 +189,7 @@ export function createSimilarView(ctx) {
     filterChips.style.display = '';
     const sum = summarize(pairs);
     const chip = (id, label, count) => h('button', {
-      class: `kbx-filter-chip${verdictFilter === id ? ' is-active' : ''}`, type: 'button', dataset: { verdictFilter: id },
+      class: `kbx-filter-chip${verdictFilter === id ? ' is-active' : ''}`, type: 'button', dataset: { verdictFilter: id, action: 'similar_verdict_filter', recordValue: 'verdict' }, value: id,
       onClick: () => { verdictFilter = id; render(); },
     }, label, h('span', { class: 'kbx-count' }, String(count)));
     filterChips.append(chip('all', 'All', sum.total));
@@ -205,9 +206,9 @@ export function createSimilarView(ctx) {
     return h('div', { class: 'kbx-pair-side' },
       h('div', { class: 'kbx-row', style: { gap: '6px', alignItems: 'center', justifyContent: 'space-between' } },
         h('div', { class: 'kbx-row', style: { gap: '6px' } }, ...chips),
-        h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { role: 'open-entry', entryId: entry.id },
+        h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { role: 'open-entry', entryId: entry.id, action: 'entry_open', targetEntryId: entry.id, outcome: 'open' },
           onClick: () => openEntryDetail(ctx, entry.id, { onChanged: () => runScan() }) }, 'Open')),
-      h('div', { class: 'kbx-item-body', style: { marginTop: '6px' } }, truncate(entry.content, 600)),
+      h('div', { class: 'kbx-item-body', style: { marginTop: '6px' } }, truncate(markdownToText(entry.content), 600)),
       entry.useful_for ? h('div', { class: 'kbx-item-body kbx-muted', style: { fontSize: '12px', marginTop: '4px' } }, h('strong', {}, 'Useful for: '), truncate(entry.useful_for, 160)) : null,
       h('div', { class: 'kbx-mono kbx-muted', style: { fontSize: '11px', marginTop: '6px' }, title: fmtDate(entry.created_at) },
         `${String(entry.id || '').slice(0, 8)} · ${entry.source || 'no source'} · ${entry.created_at ? timeAgo(entry.created_at) : ''}`));
@@ -221,7 +222,7 @@ export function createSimilarView(ctx) {
         h('span', { class: `kbx-chip ${similarityTone(sim)}` }, `${(sim * 100).toFixed(1)}% similar`),
         h('div', { style: { width: '120px' } }, meter(sim)),
         j ? h('span', { class: `kbx-chip ${VERDICT_TONE[j.verdict] || 'muted'}`, dataset: { role: 'verdict' } }, `${VERDICT_LABEL[j.verdict] || j.verdict} · ${Math.round((j.confidence || 0) * 100)}%`) : null),
-      j ? null : h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { role: 'judge-one' }, onClick: () => judge([p]) }, h('i', { class: 'bi bi-stars' }), 'Judge'));
+      j ? null : h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { role: 'judge-one', action: 'similar_judge_pair', outcome: 'request' }, onClick: () => judge([p]) }, h('i', { class: 'bi bi-stars' }), 'Judge'));
     const sides = h('div', { class: 'kbx-pair' }, entrySide(p.a, 'A'), entrySide(p.b, 'B'));
     const verdict = j ? h('div', { class: `kbx-alert ${VERDICT_TONE[j.verdict] === 'danger' ? 'warn' : (VERDICT_TONE[j.verdict] || 'info')}`, style: { marginTop: '10px', display: 'block' } },
       h('strong', {}, `${VERDICT_LABEL[j.verdict] || j.verdict}: `), j.reason || '',
@@ -244,9 +245,9 @@ export function createSimilarView(ctx) {
       ? h('span', { class: `kbx-chip ${outcome.kind === 'applied' ? (outcome.status === 'applied' ? 'success' : 'warn') : 'muted'}`, dataset: { role: 'outcome' } },
         outcome.kind === 'applied' ? `Applied: ${outcome.status}` : 'Dismissed')
       : h('div', { class: 'kbx-row', style: { gap: '6px' } },
-        actionable ? h('button', { class: 'kbx-btn kbx-btn-primary kbx-btn-sm', type: 'button', dataset: { role: 'apply' }, disabled: !applicable || !judgementIds.get(pairKey(p.a.id, p.b.id)),
+        actionable ? h('button', { class: 'kbx-btn kbx-btn-primary kbx-btn-sm', type: 'button', dataset: { role: 'apply', action: 'similar_apply_pair', outcome: 'request' }, disabled: !applicable || !judgementIds.get(pairKey(p.a.id, p.b.id)),
           title: applicable ? '' : 'An edit no longer matches the current text; judge this pair again.', onClick: () => applyPair(p) }, h('i', { class: 'bi bi-check2' }), 'Approve & apply') : null,
-        h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { role: 'dismiss' }, onClick: () => dismissPair(p) }, 'Dismiss'));
+        h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { role: 'dismiss', action: 'similar_dismiss_pair' }, onClick: () => dismissPair(p) }, 'Dismiss'));
     const panel = h('div', { class: 'kbx-proposal', dataset: { role: 'proposal', kind: prop.kind } },
       h('div', { class: 'kbx-proposal-head' },
         h('div', { class: 'kbx-row', style: { gap: '8px', alignItems: 'center' } },
@@ -271,7 +272,7 @@ export function createSimilarView(ctx) {
           const full = h('div', { class: 'kbx-pair', style: { display: 'none' }, dataset: { role: 'full-text' } },
             h('div', {}, h('div', { class: 'kbx-proposal-label' }, 'Current content'), h('div', { class: 'kbx-proposal-text' }, entry ? entry.content : '')),
             h('div', {}, h('div', { class: 'kbx-proposal-label' }, 'Resulting content'), h('div', { class: 'kbx-proposal-text is-proposed', dataset: { role: 'proposed-content' } }, c.content)));
-          const toggle = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { role: 'toggle-full' }, onClick: () => { const show = full.style.display === 'none'; full.style.display = show ? '' : 'none'; toggle.textContent = show ? 'Hide full text' : 'Show full text'; } }, 'Show full text');
+          const toggle = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { role: 'toggle-full', action: 'similar_full_text_toggle' }, onClick: () => { const show = full.style.display === 'none'; full.style.display = show ? '' : 'none'; toggle.textContent = show ? 'Hide full text' : 'Show full text'; } }, 'Show full text');
           panel.append(h('div', { style: { marginTop: '6px' } }, toggle), full);
         }
       } else if (c.action === 'delete' && entry) {

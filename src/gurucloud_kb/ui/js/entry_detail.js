@@ -9,6 +9,7 @@ import { customDims, dimsOf, kindOf, kindDim, knownValues } from './schema_utils
 import { entryToPlaybookDraft } from './promote.js';
 import { openPlaybookEditor } from './playbook_editor.js';
 import { renderConnectionsSection } from './connections.js';
+import { renderMarkdown } from './markdown_model.js';
 
 const HIDDEN_META = new Set(['is_example', 'is_gotcha']);
 
@@ -50,9 +51,11 @@ export async function openEntryDetail(ctx, entryId, { onChanged } = {}) {
   if (meta.is_gotcha) chips.push(h('span', { class: 'kbx-chip warn' }, 'Gotcha'));
   if (meta.supersedes) chips.push(h('span', { class: 'kbx-chip muted' }, 'supersedes another entry'));
 
+  // Entry text is agent-authored markdown (kanban 22519ae5): render it
+  // escape-first through markdown_model.js instead of a pre-wrapped wall of text.
   const kv = h('dl', { class: 'kbx-kv' },
-    h('dt', {}, 'Content'), h('dd', { style: { whiteSpace: 'pre-wrap' } }, entry.content || '—'),
-    h('dt', {}, 'Useful for'), h('dd', { style: { whiteSpace: 'pre-wrap' } }, entry.useful_for || '—'));
+    h('dt', {}, 'Content'), h('dd', {}, markdownBlock(entry.content, 'content')),
+    h('dt', {}, 'Useful for'), h('dd', {}, markdownBlock(entry.useful_for, 'useful-for')));
   const dimRow = dimensionRow(entry, schema);
   if (dimRow) kv.append(h('dt', {}, 'Dimensions'), h('dd', {}, dimRow));
   kv.append(
@@ -68,7 +71,7 @@ export async function openEntryDetail(ctx, entryId, { onChanged } = {}) {
   const kd = kindDim(schema);
   const extraMeta = Object.entries(meta).filter(([k]) => !HIDDEN_META.has(k) && !(kd && k === kd.name));
   const metaBlock = extraMeta.length
-    ? h('details', { class: 'kbx-mt' }, h('summary', { class: 'kbx-muted', style: { cursor: 'pointer', fontSize: '13px' } }, `Metadata (${extraMeta.length})`),
+    ? h('details', { class: 'kbx-mt' }, h('summary', { class: 'kbx-muted', style: { cursor: 'pointer', fontSize: '13px' }, dataset: { action: 'entry_metadata_toggle', targetEntryId: entry.id } }, `Metadata (${extraMeta.length})`),
         h('pre', { class: 'kbx-code kbx-mt', style: { whiteSpace: 'pre-wrap' } }, JSON.stringify(Object.fromEntries(extraMeta), null, 2)))
     : null;
 
@@ -84,21 +87,28 @@ export async function openEntryDetail(ctx, entryId, { onChanged } = {}) {
     chips.some(Boolean) ? h('div', { class: 'kbx-row', style: { gap: '6px', marginBottom: '12px' } }, ...chips) : null,
     kv, metaBlock, connections));
 
-  const editBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', onClick: () => { ref.close(); openEditModal(ctx, entry, onChanged); } }, h('i', { class: 'bi bi-pencil' }), 'Edit');
-  const promoteBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', title: 'Turn this entry into an ordered procedure agents retrieve whole', onClick: () => {
+  const editBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { action: 'entry_edit_open', targetEntryId: entry.id, outcome: 'open' }, onClick: () => { ref.close(); openEditModal(ctx, entry, onChanged); } }, h('i', { class: 'bi bi-pencil' }), 'Edit');
+  const promoteBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', title: 'Turn this entry into an ordered procedure agents retrieve whole', dataset: { action: 'entry_promote_open', targetEntryId: entry.id, outcome: 'open' }, onClick: () => {
     ref.close();
     openPlaybookEditor(ctx, null, {
       prefill: entryToPlaybookDraft(entry),
       onSaved: () => { toast('Playbook created from entry', 'success'); if (ctx.activate) ctx.activate('playbooks'); },
     });
   } }, h('i', { class: 'bi bi-journal-plus' }), 'Promote to playbook');
-  const delBtn = h('button', { class: 'kbx-btn kbx-btn-danger', type: 'button', onClick: async () => {
+  const delBtn = h('button', { class: 'kbx-btn kbx-btn-danger', type: 'button', dataset: { action: 'entry_delete_open', targetEntryId: entry.id, outcome: 'open' }, onClick: async () => {
     const ok = await confirmModal({ title: 'Delete entry', message: 'Permanently delete this entry from the Knowledge Bank? This cannot be undone.' });
     if (!ok) return;
     try { await api.deleteEntry(entry.id); toast('Entry deleted', 'success'); ref.close(); if (onChanged) onChanged('deleted', entry); ctx.refreshInfo(); }
     catch (e) { toast(`Delete failed: ${e.message}`, 'error'); }
   } }, h('i', { class: 'bi bi-trash' }), 'Delete');
   ref.setFoot([editBtn, promoteBtn, delBtn]);
+}
+
+/** A .kbx-md block for one markdown field, or an em dash when empty. */
+export function markdownBlock(text, role) {
+  const html = renderMarkdown(text);
+  if (!html) return '—';
+  return h('div', { class: 'kbx-md', dataset: { role: `entry-${role}` }, html });
 }
 
 function tagWrap(list) { return h('div', { class: 'kbx-tags' }, ...list.map((s) => h('span', { class: 'kbx-tag' }, s))); }
@@ -119,8 +129,8 @@ export function openEditModal(ctx, entry, onChanged) {
     hasSystems ? h('div', { class: 'kbx-field' }, h('label', {}, 'Systems'), systemsInput) : null,
     hasTasks ? h('div', { class: 'kbx-field' }, h('label', {}, 'Tasks'), tasksInput) : null,
     h('div', { class: 'kbx-hint' }, 'Content and useful-for are re-embedded on save. Systems/tasks are replaced with the values above.'));
-  const saveBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button' }, 'Save changes');
-  const ref = openModal({ title: 'Edit entry', body, footer: [h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', onClick: () => ref.close() }, 'Cancel'), saveBtn] });
+  const saveBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', dataset: { action: 'entry_edit_save', targetEntryId: entry.id, outcome: 'request' } }, 'Save changes');
+  const ref = openModal({ title: 'Edit entry', body, footer: [h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { action: 'dialog_cancel' }, onClick: () => ref.close() }, 'Cancel'), saveBtn] });
   saveBtn.addEventListener('click', async () => {
     const updates = { update_content: contentTa.value.trim(), update_useful_for: usefulTa.value.trim() };
     if (hasSystems) updates.replace_systems = splitList(systemsInput.value);
@@ -163,14 +173,14 @@ export function openAddModal(ctx, knownEntries, onAdded) {
   if (cats.length) {
     const row = h('div', { class: 'kbx-row' });
     cats.forEach((c) => {
-      const cb = h('input', { type: 'checkbox' });
+      const cb = h('input', { type: 'checkbox', dataset: { action: 'entry_add_flag', recordValue: 'flag' } });
       catChecks[c.tag] = cb;
       row.append(h('label', { class: 'kbx-check' }, cb, c.display_name || c.tag));
     });
     body.append(h('div', { class: 'kbx-field' }, h('label', {}, 'Categories'), row));
   }
-  const saveBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button' }, 'Add entry');
-  const ref = openModal({ title: 'Add entry', body, footer: [h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', onClick: () => ref.close() }, 'Cancel'), saveBtn] });
+  const saveBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', dataset: { action: 'entry_add_save', outcome: 'request' } }, 'Add entry');
+  const ref = openModal({ title: 'Add entry', body, footer: [h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { action: 'dialog_cancel' }, onClick: () => ref.close() }, 'Cancel'), saveBtn] });
   saveBtn.addEventListener('click', async () => {
     const dimensions = {};
     for (const [name, { input, dim }] of Object.entries(fields)) {

@@ -6,6 +6,7 @@ import { openModal, confirmModal } from './modal.js';
 import { openPlaybookEditor } from './playbook_editor.js';
 import { openEntryDetail } from './entry_detail.js';
 import { truncate } from './schema_utils.js';
+import { markdownToText } from './markdown_model.js';
 import { sortSteps, stepKind, describeTransitions, isBranching, cleanStep } from './playbook_graph.js';
 import { runsSection } from './playbook_runs.js';
 import { isProcess, handoffRows, optionalColumns, documentationBanner, processMetaPairs } from './process_view.js';
@@ -41,9 +42,9 @@ export async function openPlaybookDetail(ctx, slug, { onChanged, highlight } = {
         transitionList(st, ordered),
         st.kb_entry_id ? h('div', { class: 'kbx-step-link' },
           linked && !linked.missing
-            ? h('div', { class: 'kbx-alert info', style: { padding: '8px 11px', cursor: 'pointer' }, onClick: () => { ref.close(); openEntryDetail(ctx, st.kb_entry_id); } },
+            ? h('div', { class: 'kbx-alert info', role: 'button', tabindex: '0', style: { padding: '8px 11px', cursor: 'pointer' }, dataset: { action: 'playbook_linked_entry_open', targetEntryId: st.kb_entry_id, targetSlug: slug, outcome: 'open' }, onClick: () => { ref.close(); openEntryDetail(ctx, st.kb_entry_id); } },
                 h('i', { class: 'bi bi-link-45deg' }),
-                h('div', {}, h('div', { style: { fontWeight: '600' } }, 'Linked entry'), h('div', { class: 'kbx-muted', style: { fontSize: '12px' } }, truncate(linked.content, 180))))
+                h('div', {}, h('div', { style: { fontWeight: '600' } }, 'Linked entry'), h('div', { class: 'kbx-muted', style: { fontSize: '12px' } }, truncate(markdownToText(linked.content), 180))))
             : h('span', { class: 'kbx-chip danger' }, `Linked entry missing: ${String(st.kb_entry_id).slice(0, 8)}`)) : null)));
   });
 
@@ -73,9 +74,9 @@ export async function openPlaybookDetail(ctx, slug, { onChanged, highlight } = {
     });
   }
   const changed = () => { if (onChanged) onChanged(); };
-  const versionsBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', onClick: () => { ref.close(); openPlaybookVersions(ctx, slug, { onChanged }); } }, h('i', { class: 'bi bi-clock-history' }), 'Versions');
-  const editBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', onClick: () => { ref.close(); openPlaybookEditor(ctx, pb, { onSaved: changed }); } }, h('i', { class: 'bi bi-pencil' }), 'Edit');
-  const delBtn = h('button', { class: 'kbx-btn kbx-btn-danger', type: 'button', onClick: () => { ref.close(); confirmDeletePlaybook(ctx, pb.slug, pb.title, { onChanged, process }); } }, h('i', { class: 'bi bi-trash' }), 'Delete');
+  const versionsBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { action: 'playbook_versions_open', targetSlug: slug, outcome: 'open' }, onClick: () => { ref.close(); openPlaybookVersions(ctx, slug, { onChanged }); } }, h('i', { class: 'bi bi-clock-history' }), 'Versions');
+  const editBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { action: 'playbook_edit_open', targetSlug: slug, outcome: 'open' }, onClick: () => { ref.close(); openPlaybookEditor(ctx, pb, { onSaved: changed }); } }, h('i', { class: 'bi bi-pencil' }), 'Edit');
+  const delBtn = h('button', { class: 'kbx-btn kbx-btn-danger', type: 'button', dataset: { action: 'playbook_delete_open', targetSlug: slug, outcome: 'open' }, onClick: () => { ref.close(); confirmDeletePlaybook(ctx, pb.slug, pb.title, { onChanged, process }); } }, h('i', { class: 'bi bi-trash' }), 'Delete');
   ref.setFoot([versionsBtn, editBtn, delBtn]);
 }
 
@@ -157,7 +158,7 @@ export async function openPlaybookVersions(ctx, slug, { onChanged } = {}) {
         v.changed_by ? h('span', {}, `by ${v.changed_by}`) : null,
         snap.steps ? h('span', {}, `${snap.steps.length} steps`) : null),
       h('div', { class: 'kbx-row kbx-mt' },
-        !tombstone ? h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', onClick: () => restore(slug, snap, v.version) }, h('i', { class: 'bi bi-arrow-counterclockwise' }), `Restore v${v.version}`) : null)));
+        !tombstone ? h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { action: 'playbook_version_restore', targetSlug: slug, targetVersion: String(v.version) }, onClick: () => restore(slug, snap, v.version) }, h('i', { class: 'bi bi-arrow-counterclockwise' }), `Restore v${v.version}`) : null)));
   });
   ref.setBody(list);
 
@@ -180,8 +181,8 @@ export function confirmDeletePlaybook(ctx, slug, title, { onChanged, process = f
   const { api } = ctx;
   const noun = process ? 'process' : 'playbook';
   const reason = h('textarea', { class: 'kbx-textarea', rows: '3', placeholder: `Why is "${title}" being deleted? (min ${MIN_DELETE_REASON} characters — kept as a tombstone)` });
-  const delBtn = h('button', { class: 'kbx-btn kbx-btn-danger', type: 'button' }, `Delete ${noun}`);
-  const ref = openModal({ title: `Delete "${title}"`, body: h('div', {}, h('p', { style: { marginTop: 0 } }, `The ${noun} row is removed but a tombstone version preserves its last state and your reason.`), h('div', { class: 'kbx-field' }, h('label', {}, 'Reason'), reason)), footer: [h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', onClick: () => ref.close() }, 'Cancel'), delBtn] });
+  const delBtn = h('button', { class: 'kbx-btn kbx-btn-danger', type: 'button', dataset: { action: 'playbook_delete_confirm', targetSlug: slug, outcome: 'request' } }, `Delete ${noun}`);
+  const ref = openModal({ title: `Delete "${title}"`, body: h('div', {}, h('p', { style: { marginTop: 0 } }, `The ${noun} row is removed but a tombstone version preserves its last state and your reason.`), h('div', { class: 'kbx-field' }, h('label', {}, 'Reason'), reason)), footer: [h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { action: 'dialog_cancel' }, onClick: () => ref.close() }, 'Cancel'), delBtn] });
   delBtn.addEventListener('click', async () => {
     const r = reason.value.trim();
     if (r.length < MIN_DELETE_REASON) { toast(`Reason must be at least ${MIN_DELETE_REASON} characters`, 'warning'); return; }

@@ -25,7 +25,7 @@ export function createConnectView(ctx) {
         c.mcp_url ? copyRow('MCP server URL', c.mcp_url) : null,
         h('div', { class: 'kbx-field' }, h('label', {}, '.mcp.json'),
           h('div', { style: { position: 'relative' } },
-            h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', style: { position: 'absolute', top: '8px', right: '8px' }, onClick: () => copy(snippet, 'Snippet copied') }, h('i', { class: 'bi bi-clipboard' }), 'Copy'),
+            h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', style: { position: 'absolute', top: '8px', right: '8px' }, dataset: { action: 'connect_snippet_copy' }, onClick: () => copy(snippet, 'Snippet copied') }, h('i', { class: 'bi bi-clipboard' }), 'Copy'),
             h('pre', { class: 'kbx-code' }, snippet))),
         Array.isArray(c.instructions) && c.instructions.length ? h('div', { class: 'kbx-field' }, h('label', {}, 'Setup'), h('ol', { style: { margin: 0, paddingLeft: '18px', color: 'var(--kbx-body)', fontSize: '14px', lineHeight: '1.7' } }, ...c.instructions.map((s) => h('li', {}, String(s).replace(/^\d+\.\s*/, ''))))) : null,
       ]));
@@ -72,7 +72,7 @@ export function createConnectView(ctx) {
   }
   function copyRow(label, value) {
     const input = h('input', { class: 'kbx-input kbx-mono', readonly: true, value });
-    return h('div', { class: 'kbx-field' }, h('label', {}, label), h('div', { class: 'kbx-copy-row' }, input, h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', onClick: () => copy(value, 'Copied') }, h('i', { class: 'bi bi-clipboard' }))));
+    return h('div', { class: 'kbx-field' }, h('label', {}, label), h('div', { class: 'kbx-copy-row' }, input, h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', title: `Copy ${label}`, dataset: { action: 'connect_value_copy', recordValue: 'field' }, value: label, onClick: () => copy(value, 'Copied') }, h('i', { class: 'bi bi-clipboard' }))));
   }
   function truncate(s, n) { s = s || ''; return s.length > n ? s.slice(0, n) + '…' : s; }
 

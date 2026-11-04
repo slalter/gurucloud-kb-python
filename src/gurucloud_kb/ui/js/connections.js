@@ -20,8 +20,8 @@ export function renderConnectionsSection(ctx, entry, { onOpenEntry, onChanged } 
   const formHost = h('div', {});
   let rows = [];
 
-  const addBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', onClick: () => toggleForm() }, h('i', { class: 'bi bi-plus-lg' }), 'Connect');
-  const graphBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', onClick: () => openGraph(ctx, entry, { onOpenEntry }) }, h('i', { class: 'bi bi-diagram-3' }), 'Graph');
+  const addBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { action: 'entry_connection_add_toggle', targetEntryId: entry.id }, onClick: () => toggleForm() }, h('i', { class: 'bi bi-plus-lg' }), 'Connect');
+  const graphBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { action: 'entry_connection_graph_open', targetEntryId: entry.id, outcome: 'open' }, onClick: () => openGraph(ctx, entry, { onOpenEntry }) }, h('i', { class: 'bi bi-diagram-3' }), 'Graph');
   const head = h('div', { class: 'kbx-conn-head' },
     h('div', { class: 'kbx-row', style: { gap: '8px', alignItems: 'center' } }, h('strong', {}, 'Connections'), countEl),
     h('div', { class: 'kbx-row', style: { gap: '6px' } }, graphBtn, addBtn));
@@ -51,9 +51,9 @@ export function renderConnectionsSection(ctx, entry, { onOpenEntry, onChanged } 
   }
 
   function rowEl(r) {
-    const open = h('a', { href: '#', class: 'kbx-conn-other', title: r.otherId, onClick: (e) => { e.preventDefault(); if (onOpenEntry) onOpenEntry(r.otherId); } },
+    const open = h('a', { href: '#', class: 'kbx-conn-other', title: r.otherId, dataset: { action: 'entry_open', targetEntryId: r.otherId, outcome: 'open' }, onClick: (e) => { e.preventDefault(); if (onOpenEntry) onOpenEntry(r.otherId); } },
       r.otherText || h('span', { class: 'kbx-mono' }, r.otherId.slice(0, 8)));
-    const remove = h('button', { class: 'kbx-conn-remove', type: 'button', title: 'Remove this connection', 'aria-label': 'Remove connection', onClick: async () => {
+    const remove = h('button', { class: 'kbx-conn-remove', type: 'button', title: 'Remove this connection', 'aria-label': 'Remove connection', dataset: { action: 'entry_connection_remove', targetEntryId: entry.id, outcome: 'open' }, onClick: async () => {
       const ok = await confirmModal({ title: 'Remove connection', message: `Remove "${relationLabel(r.relation, r.direction)}" ${r.otherText || r.otherId.slice(0, 8)}? The removal is audited.`, confirmLabel: 'Remove' });
       if (!ok) return;
       try {
@@ -76,7 +76,7 @@ export function renderConnectionsSection(ctx, entry, { onOpenEntry, onChanged } 
     // The bank's own vocabulary (built-ins + declared, kanban ce8de075); the
     // built-ins until it loads or when the platform predates the route.
     let allowed = RELATIONS.slice();
-    const relSel = h('select', { class: 'kbx-select' }, ...allowed.map((r) => h('option', { value: r }, r.replace(/_/g, ' '))));
+    const relSel = h('select', { class: 'kbx-select', dataset: { action: 'entry_connection_relation', recordValue: 'relation' } }, ...allowed.map((r) => h('option', { value: r }, r.replace(/_/g, ' '))));
     if (api.edgeRelations) {
       api.edgeRelations().then((vocab) => {
         allowed = relationNames(vocab);
@@ -88,7 +88,7 @@ export function renderConnectionsSection(ctx, entry, { onOpenEntry, onChanged } 
         updatePreview();
       }).catch(() => {});
     }
-    const dirSel = h('select', { class: 'kbx-select' },
+    const dirSel = h('select', { class: 'kbx-select', dataset: { action: 'entry_connection_direction', recordValue: 'direction' } },
       h('option', { value: 'outgoing' }, 'this entry → other'),
       h('option', { value: 'incoming' }, 'other → this entry'));
     const noteInput = h('input', { class: 'kbx-input', type: 'text', placeholder: 'Why they connect (optional)' });
@@ -97,8 +97,8 @@ export function renderConnectionsSection(ctx, entry, { onOpenEntry, onChanged } 
     relSel.addEventListener('change', updatePreview);
     dirSel.addEventListener('change', updatePreview);
     updatePreview();
-    const saveBtn = h('button', { class: 'kbx-btn kbx-btn-primary kbx-btn-sm', type: 'button' }, 'Save connection');
-    const cancelBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', onClick: () => clear(formHost) }, 'Cancel');
+    const saveBtn = h('button', { class: 'kbx-btn kbx-btn-primary kbx-btn-sm', type: 'button', dataset: { action: 'entry_connection_save', targetEntryId: entry.id, outcome: 'request' } }, 'Save connection');
+    const cancelBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { action: 'entry_connection_cancel' }, onClick: () => clear(formHost) }, 'Cancel');
     saveBtn.addEventListener('click', async () => {
       let body;
       try { body = buildAddRequest({ entryId: entry.id, otherId: idInput.value, relation: relSel.value, direction: dirSel.value, note: noteInput.value, allowed }); }
@@ -127,7 +127,7 @@ export function renderConnectionsSection(ctx, entry, { onOpenEntry, onChanged } 
 /** The entry's neighbourhood as a graph in a modal (GET /graph, Cytoscape + dagre). */
 export function openGraph(ctx, entry, { onOpenEntry } = {}) {
   const { api } = ctx;
-  const depthSel = h('select', { class: 'kbx-select' }, h('option', { value: '1' }, '1 hop'), h('option', { value: '2', selected: true }, '2 hops'), h('option', { value: '3' }, '3 hops'));
+  const depthSel = h('select', { class: 'kbx-select', dataset: { action: 'entry_connection_graph_depth', recordValue: 'depth' } }, h('option', { value: '1' }, '1 hop'), h('option', { value: '2', selected: true }, '2 hops'), h('option', { value: '3' }, '3 hops'));
   const caption = h('div', { class: 'kbx-hint' }, 'Loading…');
   const canvas = h('div', { class: 'kbx-conn-graph' });
   const ref = openModal({

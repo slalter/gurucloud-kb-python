@@ -65,6 +65,7 @@ def build_string_search(
     metadata_date_after: Optional[DateInput] = None,
     metadata_date_before: Optional[DateInput] = None,
     collapse: "bool | Mapping[str, Any] | None" = None,
+    query_source: Optional[str] = None,
 ) -> dict[str, Any]:
     """Build a request body for a simple single-string query.
 
@@ -73,13 +74,16 @@ def build_string_search(
     timestamps; ``datetime`` values are serialized to ISO-8601. ``event_*``
     bounds filter on the caller-supplied ``event_at`` instead of ingest time;
     ``metadata_date_*`` bounds range on the timestamp kept under the metadata
-    key ``metadata_date_field``.
+    key ``metadata_date_field``. ``query_source`` labels the bank's
+    query_performance row with who searched (e.g. ``sdk_ask``).
     """
     req: dict[str, Any] = {
         "dimensions": {"content": {"query_text": query, "weight": 1.0}},
         "k": k,
         "threshold": threshold,
     }
+    if query_source is not None:
+        req["query_source"] = query_source
     if metadata_date_field is not None:
         req["metadata_date_field"] = metadata_date_field
     bounds = {

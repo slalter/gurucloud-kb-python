@@ -1,12 +1,17 @@
 """Ask the bank step by step: the client half of ``kb.ask`` (kanban b3cb2a1b).
 
 The service runs one model turn per ``POST /banks/{kb}/ask/step`` and hands
-back the tool calls the model wants; the CLIENT executes them against the
-bank's ordinary routes (search, entry + connections, graph) and posts the
-outputs back. The shapes built here are the shapes the model's tool
-descriptions promise (kb_service/ask_agent.py) and are the same ones the
-Explorer's Ask tab builds in JavaScript (ui/js/ask_model.js), so a run looks
-identical whichever client drove it.
+back the tool calls the model wants. The model's tools are the bank's MCP
+MOUNT tools (kanban 38e21d4d: ``query_knowledge_bank``, ``get_kb_entry``,
+``get_playbook``, ...): the host runs those through ``POST
+/banks/{kb}/ask/runs/{id}/execute`` (``kb.ask_execute``) and the client posts
+the outputs on with the next step. The three pre-mount tools
+(``search_knowledge_bank`` / ``read_entry`` / ``walk_graph``) the client still
+executes itself against the bank's ordinary routes (search, entry +
+connections, graph), shaped the way their descriptions promise
+(kb_service/ask_agent.py) — the same shapes the Explorer's Ask tab builds in
+JavaScript (ui/js/ask_model.js), so a run looks identical whichever client
+drove it.
 
 Pure helpers only: no HTTP here, so they are testable without a server.
 """
@@ -17,6 +22,9 @@ from typing import Any, Callable, Mapping, Optional
 TOOL_SEARCH = "search_knowledge_bank"
 TOOL_READ = "read_entry"
 TOOL_WALK = "walk_graph"
+#: The three pre-mount tools: the client runs these itself (``execute_tool``);
+#: every other tool call is the mount's and goes to ``ask_execute``.
+LEGACY_TOOL_NAMES: tuple[str, ...] = (TOOL_SEARCH, TOOL_READ, TOOL_WALK)
 DEFAULT_K = 8
 MAX_K = 20
 MAX_WALK_DEPTH = 3
@@ -188,7 +196,51 @@ def walk_output(graph: Mapping[str, Any]) -> dict[str, Any]:
 
 # ── the loop ────────────────────────────────────────────────────────────────
 
+def is_legacy_tool(name: str) -> bool:
+    return name in LEGACY_TOOL_NAMES
+
+
+def execute_body(call_ids: Optional[list[str]] = None) -> dict[str, Any]:
+    """Body of ``POST .../ask/runs/{id}/execute``: every pending call, or the named ones."""
+    return {"call_ids": list(call_ids)} if call_ids else {}
+
+
+def split_calls(tool_calls: list[Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """``(mine, mount)``: the calls this client runs itself (the legacy tools and
+    anything the run was not given, ``known`` False) and the calls the host's
+    mount runs."""
+    mine: list[dict[str, Any]] = []
+    mount: list[dict[str, Any]] = []
+    for call in tool_calls:
+        c = dict(call) if isinstance(call, Mapping) else {}
+        name = str(c.get("name") or "")
+        (mine if is_legacy_tool(name) or c.get("known") is False else mount).append(c)
+    return mine, mount
+
+
+def merge_outputs(tool_calls: list[Any], mine: list[dict[str, Any]], executed: Any) -> list[dict[str, Any]]:
+    """The ``tool_outputs`` for a step in call order: the client's own items
+    plus the host's execute outputs; a mount call the host did not answer
+    becomes an error item so the step never stalls."""
+    by_id: dict[str, dict[str, Any]] = {str(o.get("call_id")): dict(o) for o in mine if isinstance(o, Mapping)}
+    outputs = executed.get("outputs") if isinstance(executed, Mapping) else executed
+    for o in outputs or []:
+        if isinstance(o, Mapping) and o.get("call_id") is not None:
+            by_id[str(o["call_id"])] = {k: v for k, v in o.items() if k in ("call_id", "name", "output", "error", "duration_ms")}
+    ordered: list[dict[str, Any]] = []
+    for call in tool_calls:
+        c = call if isinstance(call, Mapping) else {}
+        call_id = str(c.get("call_id") or "")
+        ordered.append(by_id.get(call_id) or tool_output_item(c, error="the mount returned no output for this call"))
+    return ordered
+
+
 ToolExecutor = Callable[[str, Mapping[str, Any]], Any]
+
+# query_source stamped on every search the ask loop runs, so the bank's
+# query_performance rows say the SDK's ask() tool searched (the Explorer's
+# Ask tab labels its own searches explorer_ask; kb_service/models.py lists them).
+QUERY_SOURCE = "sdk_ask"
 
 
 def execute_tool(name: str, arguments: Mapping[str, Any], *, search: Callable[..., Any], get_entry: Callable[[str], Any],
@@ -200,7 +252,7 @@ def execute_tool(name: str, arguments: Mapping[str, Any], *, search: Callable[..
         query = str(arguments.get("query") or "").strip()
         if not query:
             raise ValueError("search_knowledge_bank needs a query")
-        return search_output(search(query, k=search_k(arguments), threshold=0.0, collapse=True))
+        return search_output(search(query, k=search_k(arguments), threshold=0.0, collapse=True, query_source=QUERY_SOURCE))
     if name == TOOL_READ:
         entry_id = entry_id_of(arguments)
         entry = get_entry(entry_id)

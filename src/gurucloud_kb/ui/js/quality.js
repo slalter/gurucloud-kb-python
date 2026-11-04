@@ -18,12 +18,12 @@ export function createQualityView(ctx) {
     h('div', { class: 'kbx-card' },
       h('div', { class: 'kbx-card-head' },
         h('div', {}, h('h3', { class: 'kbx-card-title' }, 'Retrieval assertions'), h('div', { class: 'kbx-card-sub' }, 'Queries that should return a specific entry — the truth set for retrieval-eval.')),
-        h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', onClick: openAddAssertion }, h('i', { class: 'bi bi-plus-lg' }), 'Add assertion')),
+        h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', dataset: { action: 'quality_assertion_add_open', outcome: 'open' }, onClick: openAddAssertion }, h('i', { class: 'bi bi-plus-lg' }), 'Add assertion')),
       assertHost),
     h('div', { class: 'kbx-card' },
       h('div', { class: 'kbx-card-head' },
         h('div', {}, h('h3', { class: 'kbx-card-title' }, 'Retrieval-eval runs'), h('div', { class: 'kbx-card-sub' }, 'Re-checks every assertion and reports hit-rate + rank movement.')),
-        h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', onClick: runEval }, h('i', { class: 'bi bi-play-circle' }), 'Run eval now')),
+        h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { action: 'quality_eval_run', outcome: 'request' }, onClick: runEval }, h('i', { class: 'bi bi-play-circle' }), 'Run eval now')),
       evalHost),
     h('div', { class: 'kbx-card' },
       h('div', { class: 'kbx-card-head' }, h('h3', { class: 'kbx-card-title' }, 'Clustering'), h('div', { class: 'kbx-card-sub' }, 'Group entries by a field to find themes and near-duplicates.')),
@@ -44,7 +44,7 @@ export function createQualityView(ctx) {
           h('td', { class: 'kbx-num' }, a.baseline_rank != null ? `#${a.baseline_rank}` : '—'),
           h('td', {}, a.source || '—'),
           h('td', { class: 'kbx-muted', style: { whiteSpace: 'nowrap' } }, timeAgo(a.created_at)),
-          h('td', {}, h('button', { class: 'kbx-btn kbx-btn-danger kbx-btn-sm', type: 'button', onClick: () => removeAssertion(a.id) }, h('i', { class: 'bi bi-trash' })))))));
+          h('td', {}, h('button', { class: 'kbx-btn kbx-btn-danger kbx-btn-sm', type: 'button', title: 'Remove assertion', dataset: { action: 'quality_assertion_remove', targetAssertionId: a.id }, onClick: () => removeAssertion(a.id) }, h('i', { class: 'bi bi-trash' })))))));
       mount(assertHost, h('div', { class: 'kbx-table-wrap' }, table));
     } catch (e) {
       mount(assertHost, h('div', { class: 'kbx-alert danger' }, `Could not load assertions: ${e.message}`));
@@ -60,11 +60,11 @@ export function createQualityView(ctx) {
     const entryI = h('input', { class: 'kbx-input kbx-mono', placeholder: 'Entry id this query should retrieve' });
     const queryI = h('textarea', { class: 'kbx-textarea', rows: '2', placeholder: 'The query text that should return that entry' });
     const notesI = h('input', { class: 'kbx-input', placeholder: 'Notes (optional)' });
-    const saveBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button' }, 'Add assertion');
+    const saveBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', dataset: { action: 'quality_assertion_add_save', outcome: 'request' } }, 'Add assertion');
     const ref = openModal({ title: 'Add retrieval assertion', body: h('div', {},
       h('div', { class: 'kbx-field' }, h('label', {}, 'Entry id'), entryI),
       h('div', { class: 'kbx-field' }, h('label', {}, 'Query'), queryI),
-      h('div', { class: 'kbx-field' }, h('label', {}, 'Notes'), notesI)), footer: [h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', onClick: () => ref.close() }, 'Cancel'), saveBtn] });
+      h('div', { class: 'kbx-field' }, h('label', {}, 'Notes'), notesI)), footer: [h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { action: 'dialog_cancel' }, onClick: () => ref.close() }, 'Cancel'), saveBtn] });
     saveBtn.addEventListener('click', async () => {
       const entry_id = entryI.value.trim(); const query = queryI.value.trim();
       if (!entry_id || !query) { toast('Entry id and query are required', 'warning'); return; }
@@ -147,8 +147,8 @@ export function createQualityView(ctx) {
   function renderClusterControls() {
     const schema = ctx.getSchema();
     const dimOpts = (schema && schema.dimensions ? schema.dimensions : []).map((d) => h('option', { value: d.name }, d.display_name || d.name));
-    const fieldSel = h('select', { class: 'kbx-select', style: { width: 'auto' } }, h('option', { value: '' }, 'Auto (all fields)'), ...dimOpts);
-    const runBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button' }, h('i', { class: 'bi bi-diagram-3' }), 'Run clustering');
+    const fieldSel = h('select', { class: 'kbx-select', style: { width: 'auto' }, dataset: { action: 'quality_cluster_field', recordValue: 'field' } }, h('option', { value: '' }, 'Auto (all fields)'), ...dimOpts);
+    const runBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', dataset: { action: 'quality_cluster_run', outcome: 'request' } }, h('i', { class: 'bi bi-diagram-3' }), 'Run clustering');
     const out = h('div', { class: 'kbx-mt' });
     runBtn.addEventListener('click', async () => {
       runBtn.classList.add('is-loading'); mount(out, skeleton('Clustering… this can take a moment.'));

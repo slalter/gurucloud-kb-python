@@ -116,7 +116,8 @@ class DimensionSchema(TypedDict, total=False):
     ``content``. ``None``/empty (the default) returns ``id`` + ``content`` only.
     Allowed values: the standard result fields (``useful_for``,
     ``relevant_systems``, ``relevant_tasks``, ``relevant_file_paths``,
-    ``source``, ``metadata``, ``combined_score``, ``created_at``,
+    ``source``, ``metadata``, ``combined_score``, ``dimension_scores``,
+    ``similarity``, ``dimension_similarities``, ``created_at``,
     ``updated_at``) plus the KB's own dimension names. Only affects the MCP
     response shape; the REST API and stored data are unchanged."""
     edge_relations: list[EdgeRelationConfig]
@@ -195,7 +196,15 @@ class EntryResult(TypedDict, total=False):
     dimensions: dict[str, str | list[str]]
     metadata: dict[str, Any]
     source: str
+    # Relative ranking score in [0, 1]: weighted (1+cos)/2 dimension scores
+    # plus a lexical boost, clamped at 1.0. The top hit often reads 1.0 and
+    # values are not comparable across queries: never a similarity test.
     combined_score: float
+    # Absolute similarity in [-1, 1]: weight-averaged cosine over the dense
+    # dimensions the entry matched; comparable across queries.
+    similarity: float
+    dimension_similarities: dict[str, float]  # cosine per matched dimension
+    dimension_scores: dict[str, float]  # raw (1+cos)/2 per searched dimension
     created_at: str
     updated_at: str
     event_at: str  # caller-supplied event time (ISO-8601), null when unset
@@ -349,6 +358,11 @@ class SearchRequest(TypedDict, total=False):
     dimensions: dict[str, DimensionQuery]
     k: int
     threshold: float
+    """Minimum RAW combined score: a relative ranking cutoff, not a similarity."""
+    min_similarity: float
+    """Absolute cosine cutoff (-1..1) on each result's ``similarity``, applied
+    after ranking (a query can return fewer than ``k``). Use this, not
+    ``threshold``, for near-duplicate tests."""
     combination_mode: CombinationMode
     custom_formula: str
     metadata_filters: dict[str, Any]
@@ -363,6 +377,9 @@ class SearchRequest(TypedDict, total=False):
     metadata_date_after: str | datetime
     metadata_date_before: str | datetime
     lexical: LexicalOptions
+    query_source: str
+    """Who is searching, recorded on the bank's query_performance row
+    (``agent_query``, ``sdk_ask``, ...; at most 50 characters)."""
 
 
 # ── Clustering ──────────────────────────────────────────────────
@@ -959,13 +976,58 @@ class PlaybookOverlapCandidate(TypedDict, total=False):
     """True when the overlap predates this write (it never blocks an update)."""
 
 
+class PlaybookMergeReport(TypedDict, total=False):
+    """What a ``base_version`` merge did (on the write result)."""
+
+    base_version: int
+    live_version: int
+    action: Literal["proposed", "merged", "unchanged"]
+    """proposed: nothing changed upstream; merged: disjoint edits combined; unchanged: nothing written."""
+    touched_local: list[str]
+    touched_upstream: list[str]
+
+
 class PlaybookWriteResult(TypedDict, total=False):
-    action: Literal["created", "updated"]
+    action: Literal["created", "updated", "unchanged"]
+    """``unchanged``: a ``base_version`` merge found nothing to write (no version bump)."""
     playbook: Playbook
     metadata_kept: list[str]
     """Reserved metadata keys (verdicts, derived_from) a replace omitted and the service kept."""
     existing_overlaps: list[PlaybookOverlapCandidate]
     """Active siblings that already overlapped this playbook before the write."""
+    merge: PlaybookMergeReport | None
+    """Present on a ``base_version`` merge write."""
+
+
+class PlaybookFieldChange(TypedDict, total=False):
+    before: Any
+    after: Any
+
+
+class PlaybookStepChange(TypedDict, total=False):
+    key: str
+    changes: dict[str, PlaybookFieldChange]
+
+
+class PlaybookStepMove(TypedDict, total=False):
+    key: str
+    before: int
+    after: int
+
+
+class PlaybookDiff(TypedDict, total=False):
+    """What changed between two versions of one playbook (``playbook_diff``)."""
+
+    slug: str
+    from_version: int
+    to_version: int
+    header: dict[str, PlaybookFieldChange]
+    added: list[dict[str, Any]]
+    removed: list[dict[str, Any]]
+    changed: list[PlaybookStepChange]
+    moved: list[PlaybookStepMove]
+    unchanged: list[str]
+    identical: bool
 
 
 class PlaybookVersion(TypedDict, total=False):
@@ -1356,10 +1418,29 @@ class AskToolCall(TypedDict, total=False):
     """One tool the model asked for in an ask step."""
 
     call_id: str
-    name: str  # search_knowledge_bank | read_entry | walk_graph
+    name: str  # a mount tool (query_knowledge_bank, get_kb_entry, get_playbook, ...) or a legacy one (search_knowledge_bank | read_entry | walk_graph)
     arguments: dict[str, Any]
     raw_arguments: str
     known: bool  # False when the model named a tool it was not given
+
+
+class AskToolOutput(TypedDict, total=False):
+    """One tool result: what ``kb.ask_execute`` returns per call and what the next ``ask_step`` takes in ``tool_outputs``."""
+
+    call_id: str
+    name: str
+    output: Any  # None when the call failed
+    error: str
+    duration_ms: float
+
+
+class AskExecute(TypedDict, total=False):
+    """``kb.ask_execute(run_id)``: the pending step's tool calls, run on the bank's MCP mount."""
+
+    run_id: str
+    step: int
+    mount: dict[str, Any]  # {kind: hosted | native | legacy, label, tool_names, server_id?, url?}
+    outputs: list[AskToolOutput]
 
 
 class AskUsage(TypedDict, total=False):
@@ -1457,7 +1538,8 @@ class AskConfig(TypedDict, total=False):
     default_reasoning_effort: str
     max_steps_default: int
     max_steps_max: int
-    tools: list[dict[str, str]]
+    tools: list[dict[str, str]]  # the mount's read tools: [{name, description}]
+    mount: dict[str, Any]  # where they come from: {kind: hosted | native | legacy, label, tool_names, ...}
 
 
 class ConnectionBackfillReport(TypedDict, total=False):

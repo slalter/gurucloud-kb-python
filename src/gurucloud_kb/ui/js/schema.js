@@ -37,7 +37,7 @@ export function createSchemaView(ctx) {
         h('td', { class: 'kbx-num' }, d.default_weight ?? '—'),
         h('td', {}, d.searchable !== false ? h('i', { class: 'bi bi-check-lg', style: { color: 'var(--kbx-success)' } }) : h('span', { class: 'kbx-muted' }, '—')),
         h('td', {}, d.dimension_type === 'multi' ? (d.aggregation || 'top_k_avg') : '—'),
-        h('td', {}, h('button', { class: 'kbx-btn kbx-btn-danger kbx-btn-sm', type: 'button', title: 'Remove dimension', onClick: () => removeDim(d.name) }, h('i', { class: 'bi bi-trash' })))))));
+        h('td', {}, h('button', { class: 'kbx-btn kbx-btn-danger kbx-btn-sm', type: 'button', title: 'Remove dimension', dataset: { action: 'schema_dimension_remove', targetDimension: d.name }, onClick: () => removeDim(d.name) }, h('i', { class: 'bi bi-trash' })))))));
 
     const cats = schema.categories || [];
     const catCard = h('div', { class: 'kbx-card' },
@@ -54,7 +54,7 @@ export function createSchemaView(ctx) {
       h('div', { class: 'kbx-card' },
         h('div', { class: 'kbx-card-head' },
           h('div', {}, h('h3', { class: 'kbx-card-title' }, 'Dimensions'), h('div', { class: 'kbx-card-sub' }, `${dims.length} dimension${dims.length === 1 ? '' : 's'} · schema v${schema.version ?? '?'}`)),
-          h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', onClick: () => openAddDim(schema) }, h('i', { class: 'bi bi-plus-lg' }), 'Add dimension')),
+          h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', dataset: { action: 'schema_dimension_add_open', outcome: 'open' }, onClick: () => openAddDim(schema) }, h('i', { class: 'bi bi-plus-lg' }), 'Add dimension')),
         h('div', { class: 'kbx-table-wrap' }, table)),
       catCard,
       h('div', { class: 'kbx-card' }, h('div', { class: 'kbx-card-head' }, h('h3', { class: 'kbx-card-title' }, 'Configuration')), flags));
@@ -74,13 +74,13 @@ export function createSchemaView(ctx) {
   function openAddDim() {
     const nameI = h('input', { class: 'kbx-input kbx-mono', placeholder: 'lower_snake_case' });
     const displayI = h('input', { class: 'kbx-input', placeholder: 'Display name' });
-    const typeSel = h('select', { class: 'kbx-select' }, h('option', { value: 'single' }, 'Single'), h('option', { value: 'multi' }, 'Multi'), h('option', { value: 'text_only' }, 'Text only'));
+    const typeSel = h('select', { class: 'kbx-select', dataset: { action: 'schema_dimension_type', recordValue: 'type' } }, h('option', { value: 'single' }, 'Single'), h('option', { value: 'multi' }, 'Multi'), h('option', { value: 'text_only' }, 'Text only'));
     const descI = h('textarea', { class: 'kbx-textarea', rows: '2', placeholder: 'What this dimension holds' });
     const weightI = h('input', { class: 'kbx-input', type: 'number', step: '0.1', value: '1.0' });
     const maxItemsI = h('input', { class: 'kbx-input', type: 'number', value: '10' });
     const maxItemsField = h('div', { class: 'kbx-field kbx-hidden' }, h('label', {}, 'Max items'), maxItemsI);
-    const requiredCb = h('input', { type: 'checkbox' });
-    const searchableCb = h('input', { type: 'checkbox', checked: true });
+    const requiredCb = h('input', { type: 'checkbox', dataset: { action: 'schema_dimension_required_toggle', recordValue: 'required' } });
+    const searchableCb = h('input', { type: 'checkbox', checked: true, dataset: { action: 'schema_dimension_searchable_toggle', recordValue: 'searchable' } });
     typeSel.addEventListener('change', () => maxItemsField.classList.toggle('kbx-hidden', typeSel.value !== 'multi'));
 
     const body = h('div', {},
@@ -94,8 +94,8 @@ export function createSchemaView(ctx) {
       h('div', { class: 'kbx-field' }, h('label', {}, 'Description'), descI),
       h('div', { class: 'kbx-row' }, h('label', { class: 'kbx-check' }, requiredCb, 'Required'), h('label', { class: 'kbx-check' }, searchableCb, 'Searchable')));
 
-    const saveBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button' }, 'Add dimension');
-    const ref = openModal({ title: 'Add dimension', body, footer: [h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', onClick: () => ref.close() }, 'Cancel'), saveBtn] });
+    const saveBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', dataset: { action: 'schema_dimension_add_save', outcome: 'request' } }, 'Add dimension');
+    const ref = openModal({ title: 'Add dimension', body, footer: [h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { action: 'dialog_cancel' }, onClick: () => ref.close() }, 'Cancel'), saveBtn] });
     saveBtn.addEventListener('click', async () => {
       const name = nameI.value.trim();
       if (!/^[a-z][a-z0-9_]*$/.test(name)) { toast('Name must be lower_snake_case, starting with a letter', 'warning'); return; }

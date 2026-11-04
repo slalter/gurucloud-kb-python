@@ -26,7 +26,9 @@ import { actorFacets, collapsedFiltersCaption, findFacetKeys, readFiltersOpenPre
 import { allVisibleSelected, bulkMetadataPatch, bulkSummary, pruneSelection, runBulk, selectAllVisible, toggleSelected } from './bulk_model.js';
 import { openEntryDetail, openAddModal, kindChip, dimensionRow } from './entry_detail.js';
 import { semanticDims, textOnlyDims, kindDim, knownValues, observedValues, kindOf, truncate } from './schema_utils.js';
+import { markdownToText } from './markdown_model.js';
 import { entriesCountLabel } from './stats_view.js';
+import { entriesSearchPayload } from './graph_model.js';
 import { buildExpandedPayload, expansionSummary, readLlmSearchPref, readSpeedPref, writeLlmSearchPref, writeSpeedPref } from './llm_search.js';
 import {
   DEFAULT_MAX_VALUES, activeFilterChips, emptyFilterState, facetValueLabel, facetsCaption, hasActiveFilters,
@@ -56,7 +58,7 @@ export function createEntriesView(ctx) {
   // ── search card ──────────────────────────────────────────────────────────
   const searchInputs = h('div', { class: 'kbx-grid cols-2' });
   const filterInputs = h('div', { class: 'kbx-grid cols-3', style: { marginTop: '10px' } });
-  const modeSelect = h('select', { class: 'kbx-select' },
+  const modeSelect = h('select', { class: 'kbx-select', dataset: { action: 'entries_mode', recordValue: 'mode' } },
     h('option', { value: 'weighted_sum' }, 'Weighted sum'),
     h('option', { value: 'max' }, 'Best single match'),
     h('option', { value: 'min' }, 'All must match'));
@@ -65,11 +67,11 @@ export function createEntriesView(ctx) {
 
   // LLM-powered search (expanded search): off by default, remembered per bank.
   function storage() { try { return window.localStorage; } catch { return null; } }
-  const llmCb = h('input', { type: 'checkbox' });
+  const llmCb = h('input', { type: 'checkbox', dataset: { action: 'entries_llm_toggle', recordValue: 'llm' } });
   llmCb.checked = readLlmSearchPref(storage(), api.kbId);
-  const llmInput = h('input', { class: 'kbx-input', type: 'text', placeholder: 'Describe what you are looking for…' });
+  const llmInput = h('input', { class: 'kbx-input', type: 'text', placeholder: 'Describe what you are looking for…', dataset: { action: 'entries_llm_query', recordValue: 'query' } });
   llmInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') runSearch(); });
-  const speedSelect = h('select', { class: 'kbx-select', title: 'Fast: about 1 second. Thorough: about 3 seconds, a larger model that reasons first. Quality measured equal within noise.' },
+  const speedSelect = h('select', { class: 'kbx-select', dataset: { action: 'entries_llm_speed', recordValue: 'speed' }, title: 'Fast: about 1 second. Thorough: about 3 seconds, a larger model that reasons first. Quality measured equal within noise.' },
     h('option', { value: 'fast' }, 'Fast'),
     h('option', { value: 'thorough' }, 'Thorough'));
   speedSelect.value = readSpeedPref(storage(), api.kbId);
@@ -93,7 +95,7 @@ export function createEntriesView(ctx) {
     const schema = ctx.getSchema();
     clear(searchInputs);
     semanticDims(schema).forEach((d) => {
-      const input = h('input', { class: 'kbx-input', type: 'text', placeholder: `Search ${d.display_name || d.name}…`, dataset: { dim: d.name } });
+      const input = h('input', { class: 'kbx-input', type: 'text', placeholder: `Search ${d.display_name || d.name}…`, dataset: { dim: d.name, action: 'entries_query', recordValue: d.name } });
       input.addEventListener('keydown', (e) => { if (e.key === 'Enter') runSearch(); });
       searchInputs.append(h('div', { class: 'kbx-field', style: { marginBottom: 0 } },
         h('label', {}, d.display_name || d.name,
@@ -104,7 +106,7 @@ export function createEntriesView(ctx) {
     clear(filterInputs);
     const tos = textOnlyDims(schema);
     tos.forEach((d) => {
-      const sel = h('select', { class: 'kbx-select', dataset: { filterDim: d.name } }, h('option', { value: '' }, `Any ${d.display_name || d.name}`));
+      const sel = h('select', { class: 'kbx-select', dataset: { filterDim: d.name, action: 'entries_dimension_filter', recordValue: d.name } }, h('option', { value: '' }, `Any ${d.display_name || d.name}`));
       knownValues(lastResults, d).forEach((v) => sel.append(h('option', { value: v }, v)));
       sel.addEventListener('change', runSearch);
       filterInputs.append(h('div', { class: 'kbx-field', style: { marginBottom: 0 } },
@@ -113,15 +115,15 @@ export function createEntriesView(ctx) {
     filterInputs.style.display = tos.length ? '' : 'none';
   }
 
-  const searchBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', onClick: runSearch }, h('i', { class: 'bi bi-search' }), 'Search');
-  const clearBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', onClick: () => {
+  const searchBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', dataset: { action: 'entries_search' }, onClick: runSearch }, h('i', { class: 'bi bi-search' }), 'Search');
+  const clearBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { action: 'entries_clear' }, onClick: () => {
     searchInputs.querySelectorAll('input').forEach((i) => (i.value = ''));
     filterInputs.querySelectorAll('select').forEach((s) => (s.value = ''));
     llmInput.value = ''; clear(expansionHost);
     filterState = emptyFilterState(); openKeys.clear(); keyQuery = ''; buildFilterPanel();
     activeChip = null; loadEntries();
   } }, 'Clear');
-  const addBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', onClick: () => openAddModal(ctx, lastResults, loadEntries) }, h('i', { class: 'bi bi-plus-lg' }), 'Add entry');
+  const addBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', dataset: { action: 'entries_add_open', outcome: 'open' }, onClick: () => openAddModal(ctx, lastResults, loadEntries) }, h('i', { class: 'bi bi-plus-lg' }), 'Add entry');
 
   // ── filters panel (from /metadata-facets) ────────────────────────────────
   // Collapsible: the panel is tall, so it starts closed (remembered per bank)
@@ -131,9 +133,9 @@ export function createEntriesView(ctx) {
   const facetCaption = h('p', { class: 'kbx-card-sub' }, facetsCaption(null));
   const facetActiveBadge = h('span', { class: 'kbx-chip', dataset: { role: 'filters-active-count' }, style: { marginLeft: '8px', display: 'none' } }, '');
   const facetChevron = h('i', { class: 'bi bi-chevron-down', dataset: { role: 'filters-chevron' }, style: { transition: 'transform .15s' } });
-  const facetToggle = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { role: 'filters-toggle' }, 'aria-expanded': 'false' }, 'Show filters');
+  const facetToggle = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { role: 'filters-toggle', action: 'entries_filters_toggle' }, 'aria-expanded': 'false' }, 'Show filters');
   let filtersOpen = readFiltersOpenPref(storage(), api.kbId);
-  const facetHead = h('div', { class: 'kbx-card-head kbx-card-head-toggle', title: 'Show or hide the filters', dataset: { role: 'filters-head' } },
+  const facetHead = h('div', { class: 'kbx-card-head kbx-card-head-toggle', title: 'Show or hide the filters', dataset: { role: 'filters-head', action: 'entries_filters_toggle' } },
     h('div', {}, h('h3', { class: 'kbx-card-title' }, 'Filters', h('span', { class: 'kbx-chip muted', style: { marginLeft: '8px' } }, 'from the data'), facetActiveBadge), facetCaption),
     h('div', { class: 'kbx-row', style: { gap: '8px', alignItems: 'center' } }, facetToggle, facetChevron));
   const facetCard = h('div', { class: 'kbx-card', dataset: { role: 'facet-filters' } }, facetHead, facetInputs);
@@ -167,14 +169,14 @@ export function createEntriesView(ctx) {
 
   function facetSelect(facet) {
     const current = filterState.metadata[facet.key];
-    const sel = h('select', { class: 'kbx-select', dataset: { facetKey: facet.key } }, h('option', { value: '' }, `Any ${facet.key}`));
+    const sel = h('select', { class: 'kbx-select', dataset: { facetKey: facet.key, action: 'entries_facet_filter', recordValue: facet.key } }, h('option', { value: '' }, `Any ${facet.key}`));
     facet.values.forEach((v, i) => sel.append(h('option', { value: String(i) }, facetValueLabel(v))));
     sel.append(h('option', { value: '__other__' }, 'Other value…'));
     if (current) {
       const idx = facet.values.findIndex((v) => v.value === current.value && v.type === current.type && !!v.in_list === !!current.in_list);
       sel.value = idx >= 0 ? String(idx) : '__other__';
     }
-    const other = h('input', { class: 'kbx-input', type: 'text', placeholder: `Exact ${facet.key} value`, style: { marginTop: '6px', display: current && sel.value === '__other__' ? '' : 'none' } });
+    const other = h('input', { class: 'kbx-input', type: 'text', placeholder: `Exact ${facet.key} value`, dataset: { action: 'entries_facet_other_value', recordValue: facet.key }, style: { marginTop: '6px', display: current && sel.value === '__other__' ? '' : 'none' } });
     if (current && sel.value === '__other__') other.value = String(current.value);
     other.addEventListener('keydown', (e) => { if (e.key === 'Enter') setMetadataFilter(facet.key, other.value.trim() ? { value: other.value.trim(), type: facet.valueType, in_list: facet.has_list_values && !facet.values.some((v) => !v.in_list) } : null); });
     other.addEventListener('change', () => setMetadataFilter(facet.key, other.value.trim() ? { value: other.value.trim(), type: facet.valueType, in_list: facet.has_list_values && !facet.values.some((v) => !v.in_list) } : null));
@@ -201,7 +203,7 @@ export function createEntriesView(ctx) {
     const rest = more.filter((f) => !shown.includes(f));
     // key finder: any key, by typing part of its name
     if (ranked.length) {
-      const finder = h('input', { class: 'kbx-input', type: 'text', value: keyQuery, dataset: { role: 'key-finder' }, placeholder: 'Type part of a key: approved, by, status…', autocomplete: 'off' });
+      const finder = h('input', { class: 'kbx-input', type: 'text', value: keyQuery, dataset: { role: 'key-finder', action: 'entries_key_finder', recordValue: 'key' }, placeholder: 'Type part of a key: approved, by, status…', autocomplete: 'off' });
       finder.addEventListener('input', () => {
         keyQuery = finder.value;
         const pos = finder.selectionStart;
@@ -217,14 +219,14 @@ export function createEntriesView(ctx) {
     const actors = actorFacets(ranked).filter((f) => !shown.includes(f));
     if (actors.length) {
       const row = h('div', { class: 'kbx-filter-chips', dataset: { role: 'actor-keys' } });
-      actors.forEach((f) => row.append(h('button', { class: 'kbx-filter-chip', type: 'button', title: `${f.entry_count} entries carry ${f.key}`, dataset: { actorKey: f.key },
+      actors.forEach((f) => row.append(h('button', { class: 'kbx-filter-chip', type: 'button', title: `${f.entry_count} entries carry ${f.key}`, dataset: { actorKey: f.key, action: 'entries_actor_key', recordValue: 'key' }, value: f.key,
         onClick: () => { openKeys.add(f.key); buildFilterPanel(); const s = facetInputs.querySelector(`select[data-facet-key="${CSS.escape(f.key)}"]`); if (s) s.focus(); } },
       f.key, h('span', { class: 'kbx-count' }, f.entry_count.toLocaleString()))));
       facetInputs.append(h('div', { class: 'kbx-field', style: { marginBottom: 0, gridColumn: '1 / -1' } },
         h('label', {}, 'Who acted on it', h('span', { class: 'kbx-chip muted', style: { marginLeft: '6px' } }, 'click a key to filter by person')), row));
     }
     if (rest.length) {
-      const moreSel = h('select', { class: 'kbx-select', dataset: { role: 'more-keys' } }, h('option', { value: '' }, `More keys… (${rest.length})`));
+      const moreSel = h('select', { class: 'kbx-select', dataset: { role: 'more-keys', action: 'entries_more_keys', recordValue: 'key' } }, h('option', { value: '' }, `More keys… (${rest.length})`));
       rest.forEach((f) => moreSel.append(h('option', { value: f.key }, `${f.key} (${f.entry_count.toLocaleString()})`)));
       moreSel.addEventListener('change', () => { if (moreSel.value) { openKeys.add(moreSel.value); buildFilterPanel(); const s = facetInputs.querySelector(`select[data-facet-key="${CSS.escape(moreSel.value)}"]`); if (s) s.focus(); } });
       facetInputs.append(h('div', { class: 'kbx-field', style: { marginBottom: 0 } }, h('label', {}, 'Other metadata keys'), moreSel));
@@ -232,15 +234,15 @@ export function createEntriesView(ctx) {
     // source column
     const sources = facets && facets.source && Array.isArray(facets.source.values) ? facets.source.values : [];
     if (sources.length) {
-      const srcSel = h('select', { class: 'kbx-select', dataset: { role: 'source' } }, h('option', { value: '' }, 'Any source'));
+      const srcSel = h('select', { class: 'kbx-select', dataset: { role: 'source', action: 'entries_source_filter', recordValue: 'source' } }, h('option', { value: '' }, 'Any source'));
       sources.forEach((v) => srcSel.append(h('option', { value: v.value }, facetValueLabel(v))));
       srcSel.value = filterState.source || '';
       srcSel.addEventListener('change', () => { filterState = { ...filterState, source: srcSel.value }; runSearch(); });
       facetInputs.append(h('div', { class: 'kbx-field', style: { marginBottom: 0 } }, h('label', {}, 'Source', h('span', { class: 'kbx-chip muted', style: { marginLeft: '6px' } }, 'who wrote it')), srcSel));
     }
     // created date range
-    const after = h('input', { class: 'kbx-input', type: 'date', value: filterState.createdAfter || '', dataset: { role: 'created-after' } });
-    const before = h('input', { class: 'kbx-input', type: 'date', value: filterState.createdBefore || '', dataset: { role: 'created-before' } });
+    const after = h('input', { class: 'kbx-input', type: 'date', value: filterState.createdAfter || '', dataset: { role: 'created-after', action: 'entries_created_after', recordValue: 'created_after' } });
+    const before = h('input', { class: 'kbx-input', type: 'date', value: filterState.createdBefore || '', dataset: { role: 'created-before', action: 'entries_created_before', recordValue: 'created_before' } });
     after.addEventListener('change', () => { filterState = { ...filterState, createdAfter: after.value }; runSearch(); });
     before.addEventListener('change', () => { filterState = { ...filterState, createdBefore: before.value }; runSearch(); });
     facetInputs.append(
@@ -265,7 +267,7 @@ export function createEntriesView(ctx) {
     activeHost.style.display = '';
     activeHost.append(h('span', { class: 'kbx-muted', style: { fontSize: '12px', alignSelf: 'center' } }, 'Filtered by:'));
     chips.forEach((c) => activeHost.append(h('button', {
-      class: 'kbx-filter-chip is-active', type: 'button', title: 'Remove this filter', dataset: { filterKind: c.kind, filterKey: c.key || '' },
+      class: 'kbx-filter-chip is-active', type: 'button', title: 'Remove this filter', dataset: { filterKind: c.kind, filterKey: c.key || '', action: 'entries_filter_remove', recordValue: 'filter' }, value: c.key ? `${c.kind}:${c.key}` : c.kind,
       onClick: () => { filterState = removeFilter(filterState, c); buildFilterPanel(); runSearch(); },
     }, c.label, h('i', { class: 'bi bi-x', style: { marginLeft: '4px' } }))));
   }
@@ -312,7 +314,7 @@ export function createEntriesView(ctx) {
     const keyInput = h('input', { class: 'kbx-input', type: 'text', list: listId, placeholder: 'approved_by, status, reviewed…', autocomplete: 'off' });
     const dataList = h('datalist', { id: listId });
     keys.forEach((f) => dataList.append(h('option', { value: f.key }, `${f.entry_count.toLocaleString()} entries`)));
-    const typeSel = h('select', { class: 'kbx-select' },
+    const typeSel = h('select', { class: 'kbx-select', dataset: { action: 'entries_bulk_metadata_type', recordValue: 'type' } },
       h('option', { value: 'string' }, 'Text'), h('option', { value: 'number' }, 'Number'), h('option', { value: 'boolean' }, 'True / false'));
     keyInput.addEventListener('change', () => {
       const f = keys.find((x) => x.key === keyInput.value.trim());
@@ -325,8 +327,8 @@ export function createEntriesView(ctx) {
         h('div', { class: 'kbx-field' }, h('label', {}, 'Value'), valueInput),
         h('div', { class: 'kbx-field' }, h('label', {}, 'Stored as'), typeSel)),
       h('div', { class: 'kbx-hint' }, `Sets this one key on ${ids.length} ${ids.length === 1 ? 'entry' : 'entries'} and leaves their other metadata alone. Nothing is re-embedded. Every update is audited like a single edit.`));
-    const applyBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button' }, `Apply to ${ids.length}`);
-    const ref = openModal({ title: 'Set metadata on selected entries', body, footer: [h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', onClick: () => ref.close() }, 'Cancel'), applyBtn] });
+    const applyBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', dataset: { action: 'entries_bulk_metadata_apply', outcome: 'request' } }, `Apply to ${ids.length}`);
+    const ref = openModal({ title: 'Set metadata on selected entries', body, footer: [h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { action: 'dialog_cancel' }, onClick: () => ref.close() }, 'Cancel'), applyBtn] });
     setTimeout(() => keyInput.focus(), 0);
     applyBtn.addEventListener('click', async () => {
       const patch = bulkMetadataPatch(keyInput.value, valueInput.value, typeSel.value);
@@ -345,7 +347,7 @@ export function createEntriesView(ctx) {
     if (!shownEntries.length && !selection.size) { bulkHost.style.display = 'none'; return; }
     bulkHost.style.display = '';
     const n = selection.size;
-    const allCb = h('input', { type: 'checkbox', dataset: { role: 'select-all' } });
+    const allCb = h('input', { type: 'checkbox', dataset: { role: 'select-all', action: 'entries_select_all', recordValue: 'selected' } });
     allCb.checked = allVisibleSelected(selection, shownEntries);
     allCb.addEventListener('change', () => { selection = selectAllVisible(selection, shownEntries, allCb.checked); render(); });
     const disabled = !n || !!busy;
@@ -354,9 +356,9 @@ export function createEntriesView(ctx) {
       h('label', { class: 'kbx-check' }, allCb, `Select all shown (${shownEntries.length})`),
       h('span', { class: 'kbx-muted', dataset: { role: 'selected-count' }, style: { fontSize: '13px' } }, busy || (n ? `${n} selected` : 'Tick entries to act on several at once')),
       h('span', { style: { flex: '1 1 auto' } }),
-      h('button', { class: 'kbx-btn kbx-btn-sm', type: 'button', disabled: disabled || undefined, dataset: { role: 'bulk-set-metadata' }, onClick: bulkSetMetadata }, h('i', { class: 'bi bi-tags' }), 'Set metadata…'),
-      h('button', { class: 'kbx-btn kbx-btn-sm kbx-btn-danger', type: 'button', disabled: disabled || undefined, dataset: { role: 'bulk-delete' }, onClick: bulkDelete }, h('i', { class: 'bi bi-trash' }), 'Delete…'),
-      n ? h('button', { class: 'kbx-btn kbx-btn-sm kbx-btn-ghost', type: 'button', disabled: busy || undefined, dataset: { role: 'bulk-clear' }, onClick: () => { selection = new Set(); render(); } }, 'Clear') : null).childNodes);
+      h('button', { class: 'kbx-btn kbx-btn-sm', type: 'button', disabled: disabled || undefined, dataset: { role: 'bulk-set-metadata', action: 'entries_bulk_metadata_open', outcome: 'open' }, onClick: bulkSetMetadata }, h('i', { class: 'bi bi-tags' }), 'Set metadata…'),
+      h('button', { class: 'kbx-btn kbx-btn-sm kbx-btn-danger', type: 'button', disabled: disabled || undefined, dataset: { role: 'bulk-delete', action: 'entries_bulk_delete_open', outcome: 'open' }, onClick: bulkDelete }, h('i', { class: 'bi bi-trash' }), 'Delete…'),
+      n ? h('button', { class: 'kbx-btn kbx-btn-sm kbx-btn-ghost', type: 'button', disabled: busy || undefined, dataset: { role: 'bulk-clear', action: 'entries_bulk_clear' }, onClick: () => { selection = new Set(); render(); } }, 'Clear') : null).childNodes);
   }
 
   const listCard = h('div', { class: 'kbx-card' },
@@ -454,7 +456,7 @@ export function createEntriesView(ctx) {
     searching = true; searchBtn.classList.add('is-loading');
     mount(resultsHost, skeleton('Searching…'));
     try {
-      const payload = { dimensions, k: limitVal(100), threshold: parseFloat(thresholdInput.value) || 0, combination_mode: modeSelect.value, ...hardFilters() };
+      const payload = entriesSearchPayload({ dimensions, k: limitVal(100), threshold: parseFloat(thresholdInput.value) || 0, combinationMode: modeSelect.value, filters: hardFilters() });
       const data = await api.search(payload);
       lastResults = Array.isArray(data) ? data : (data.results || data.entries || []);
       showingScores = true; activeChip = null;
@@ -526,7 +528,7 @@ export function createEntriesView(ctx) {
   }
   function chip(label, count, target) {
     const active = target === null ? !activeChip : (activeChip && ((target.dim && activeChip.dim === target.dim && activeChip.value === target.value) || (target.category && activeChip.category === target.category)));
-    return h('button', { class: `kbx-filter-chip${active ? ' is-active' : ''}`, type: 'button', onClick: () => { activeChip = target; render(); } }, label, h('span', { class: 'kbx-count' }, String(count)));
+    return h('button', { class: `kbx-filter-chip${active ? ' is-active' : ''}`, type: 'button', dataset: { action: 'entries_result_chip', recordValue: 'chip' }, value: label, onClick: () => { activeChip = target; render(); } }, label, h('span', { class: 'kbx-count' }, String(count)));
   }
 
   function entryCard(entry, schema) {
@@ -540,17 +542,17 @@ export function createEntriesView(ctx) {
     (entry.relevant_tasks || []).slice(0, 6).forEach((t) => tags.push(h('span', { class: 'kbx-tag' }, t)));
 
     const picked = selection.has(entry.id);
-    const check = h('input', { type: 'checkbox', class: 'kbx-item-check', title: 'Select for a bulk action', dataset: { role: 'select-entry' }, checked: picked || undefined });
+    const check = h('input', { type: 'checkbox', class: 'kbx-item-check', title: 'Select for a bulk action', dataset: { role: 'select-entry', action: 'entries_select_entry', recordValue: 'selected', targetEntryId: entry.id }, checked: picked || undefined });
     check.addEventListener('click', (e) => e.stopPropagation());
     check.addEventListener('change', () => { selection = toggleSelected(selection, entry.id, check.checked); check.closest('.kbx-item').classList.toggle('is-selected', check.checked); renderBulkBar(); });
-    return h('div', { class: `kbx-item${picked ? ' is-selected' : ''}`, dataset: { entryId: entry.id }, onClick: () => openEntryDetail(ctx, entry.id, { onChanged: () => (showingScores ? runSearch() : loadEntries()) }) },
+    return h('div', { class: `kbx-item${picked ? ' is-selected' : ''}`, dataset: { entryId: entry.id, action: 'entry_open', targetEntryId: entry.id, outcome: 'open' }, onClick: () => openEntryDetail(ctx, entry.id, { onChanged: () => (showingScores ? runSearch() : loadEntries()) }) },
       h('div', { class: 'kbx-item-head' },
         h('div', { class: 'kbx-row', style: { gap: '6px' } }, check, ...chips),
         h('span', { class: 'kbx-mono kbx-muted', style: { fontSize: '11px' } },
           entry.source ? h('span', { title: 'source', style: { marginRight: '8px' } }, String(entry.source)) : null,
           String(entry.id || '').slice(0, 8))),
-      h('div', { class: 'kbx-item-body' }, truncate(entry.content, 320)),
-      entry.useful_for ? h('div', { class: 'kbx-item-body kbx-muted kbx-mt', style: { fontSize: '13px' } }, h('strong', {}, 'Useful for: '), truncate(entry.useful_for, 200)) : null,
+      h('div', { class: 'kbx-item-body' }, truncate(markdownToText(entry.content), 320)),
+      entry.useful_for ? h('div', { class: 'kbx-item-body kbx-muted kbx-mt', style: { fontSize: '13px' } }, h('strong', {}, 'Useful for: '), truncate(markdownToText(entry.useful_for), 200)) : null,
       dimensionRow(entry, schema),
       showingScores ? scoreBlock(entry) : null,
       tags.length ? h('div', { class: 'kbx-tags kbx-mt' }, ...tags) : null);

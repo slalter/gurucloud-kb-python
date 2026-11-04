@@ -27,16 +27,26 @@ export function ensureForceGraph3D() {
 }
 
 /** Every entry-to-entry edge in the bank (GET /edge-stats, then GET /edges
-    paged at the service cap), capped at `maxEdges`; the array carries
-    `.total` (the bank's real count). */
-export async function loadBankEdges(api, maxEdges = MAX_BANK_EDGES) {
+    paged at the service cap, `concurrency` pages in flight), capped at
+    `maxEdges`; pages keep their order, an edge a shifting offset repeats is
+    kept once, and the array carries `.total` (the bank's real count). */
+export async function loadBankEdges(api, maxEdges = MAX_BANK_EDGES, concurrency = 4) {
   const stats = await api.edgeStats();
   const total = Number(stats && stats.total) || 0;
-  const out = [];
-  for (const page of edgePages(Math.min(total, maxEdges))) {
-    const resp = await api.listEdges(page);
-    out.push(...((resp && resp.edges) || []));
+  const pages = edgePages(Math.min(total, maxEdges));
+  const results = new Array(pages.length);
+  let next = 0;
+  async function worker() {
+    while (next < pages.length) {
+      const i = next++;
+      const resp = await api.listEdges(pages[i]);
+      results[i] = (resp && resp.edges) || [];
+    }
   }
+  await Promise.all(Array.from({ length: Math.min(concurrency, pages.length) }, worker));
+  const seen = new Set();
+  const out = [];
+  results.flat().forEach((e) => { const k = e && e.id; if (k && seen.has(k)) return; if (k) seen.add(k); out.push(e); });
   out.total = total;
   return out;
 }

@@ -108,7 +108,7 @@ export function runTrailView(run, steps, onBack) {
   return h('div', { dataset: { role: 'run-trail' } },
     h('div', { class: 'kbx-row-between', style: { marginBottom: '8px' } },
       h('strong', { dataset: { role: 'run-subject' } }, run.subject || '(no subject)'),
-      h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', onClick: onBack }, h('i', { class: 'bi bi-arrow-left' }), 'Back to runs')),
+      h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { action: 'playbook_runs_back' }, onClick: onBack }, h('i', { class: 'bi bi-arrow-left' }), 'Back to runs')),
     h('dl', { class: 'kbx-kv' }, ...kv.flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)])),
     trail.length ? h('ol', { class: 'kbx-steps', style: { marginTop: '12px' } }, ...trail.map((r) => trailItem(r, steps)))
       : h('div', { class: 'kbx-muted', style: { marginTop: '12px' } }, 'No steps recorded yet'),
@@ -122,7 +122,7 @@ export function runTrailView(run, steps, onBack) {
 export function runsSection(ctx, pb) {
   const { api } = ctx;
   const steps = pb.steps || [];
-  const filter = h('select', { class: 'kbx-select kbx-btn-sm', dataset: { role: 'runs-filter' }, 'aria-label': 'Filter runs by state' },
+  const filter = h('select', { class: 'kbx-select kbx-btn-sm', dataset: { role: 'runs-filter', action: 'playbook_runs_filter', recordValue: 'state' }, 'aria-label': 'Filter runs by state' },
     ...RUN_STATES.map((s) => h('option', { value: s }, s[0].toUpperCase() + s.slice(1))));
   const body = h('div', { dataset: { role: 'runs-body' } });
   const head = h('div', { class: 'kbx-row-between', style: { margin: '18px 0 6px' } },
@@ -134,7 +134,7 @@ export function runsSection(ctx, pb) {
     filter.style.display = 'none';
     mount(body, skeleton('Loading run…'));
     try { mount(body, runTrailView(await api.getPlaybookRun(r.id), steps, back)); }
-    catch (e) { mount(body, h('div', { class: 'kbx-alert danger' }, `Could not load run: ${e.message}`), h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm kbx-mt', type: 'button', onClick: back }, 'Back to runs')); }
+    catch (e) { mount(body, h('div', { class: 'kbx-alert danger' }, `Could not load run: ${e.message}`), h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm kbx-mt', type: 'button', dataset: { action: 'playbook_runs_back' }, onClick: back }, 'Back to runs')); }
   }
   function back() { filter.style.display = ''; load(); }
   async function load() {

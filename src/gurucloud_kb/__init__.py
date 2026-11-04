@@ -30,6 +30,8 @@ from gurucloud_kb.errors import (
     PermissionError,
     PlaybookOverlapError,
     PlaybookRunError,
+    PlaybookStepConflictError,
+    PlaybookVersionConflictError,
     RateLimitError,
 )
 from gurucloud_kb.kb import KnowledgeBank
@@ -114,7 +116,9 @@ from gurucloud_kb.types import (
     GraphNeighborhood,
     AskConfig,
     AskRun,
+    AskExecute,
     AskRunDetail,
+    AskToolOutput,
     AskRunList,
     AskStep,
     AskStepRecord,
@@ -149,6 +153,8 @@ from gurucloud_kb.types import (
     PlaybookVersion,
     PlaybookOverlapCandidate,
     PlaybookWriteResult,
+    PlaybookMergeReport,
+    PlaybookDiff,
     RunList,
     RunState,
     RunStepRecord,
@@ -181,6 +187,8 @@ __all__ = [
     "RateLimitError",
     "PlaybookOverlapError",
     "PlaybookRunError",
+    "PlaybookStepConflictError",
+    "PlaybookVersionConflictError",
     "ConnectionError",
     # Types
     "KBInfo",
@@ -244,6 +252,8 @@ __all__ = [
     "EntryEdge",
     "GraphNeighborhood",
     "AskConfig",
+    "AskExecute",
+    "AskToolOutput",
     "AskRun",
     "AskRunDetail",
     "AskRunList",
@@ -292,6 +302,8 @@ __all__ = [
     "PlaybookVersion",
     "PlaybookOverlapCandidate",
     "PlaybookWriteResult",
+    "PlaybookMergeReport",
+    "PlaybookDiff",
     # Playbook runs
     "PlaybookRun",
     "RunList",
@@ -309,4 +321,4 @@ __all__ = [
     "OverlapCandidate",
 ]
 
-__version__ = "0.16.0"
+__version__ = "0.19.0"

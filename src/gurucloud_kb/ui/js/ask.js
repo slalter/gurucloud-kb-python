@@ -13,9 +13,11 @@
    for "Next step". Stop abandons the run on the service. Past runs (the
    service's audit trail) replay the same way from GET /ask/runs/{id}.
 
-   The service runs ONE model turn per POST /ask/step; this file runs the
-   tools it asks for against the Explorer API (search, entry + edges, graph)
-   through the pure shapers in ask_model.js (Node-tested). */
+   The service runs ONE model turn per POST /ask/step. The model's tools are
+   the bank's MCP mount tools (kanban 38e21d4d): this file asks the host to
+   run them (POST /ask/runs/{id}/execute) and posts the outputs on; the three
+   pre-mount tools (search / read / walk) it still runs itself against the
+   Explorer API, through the pure shapers in ask_model.js (Node-tested). */
 
 import { h, mount, clear, toast, skeleton, esc, timeAgo } from './dom.js';
 import { openEntryDetail } from './entry_detail.js';
@@ -23,9 +25,10 @@ import { RELATION_COLORS, fitPlan, labelFor, neighbourhood, pointerLine, scene }
 import { GRAPH_COLORS, ensureForceGraph3D, fitLit, flyTo, loadBankEdges } from './graph3d.js';
 import { showsModelKnobs } from './mode_model.js';
 import {
-  REASONING, TOOLS, addStep, citationSegments, continueBody, emptyTrail, entryOutput, normalizeAskOptions, outputsOf, pendingStep,
-  readRequest, searchOutput, searchRequest, setCallResult, settingsKey, startBody, stepCaption, stepFailure, trailFromRunDetail, trailPicture,
-  trailSummary, walkOutput, walkRequest,
+  REASONING, TOOLS, addStep, applyExecuteOutputs, callArgText, citationSegments, continueBody, emptyTrail, entryOutput, executeBody, isEntryId,
+  isLegacyTool, matchedPlaybooks, mountLine, mountTools, normalizeAskOptions, outputsOf, pendingStep, playbookRead, readEntry, readRequest,
+  searchOutput, searchRequest, searchRows, setCallResult, settingsKey, startBody, stepCaption, stepFailure, toolKind, trailFromRunDetail,
+  trailKnownRefs, trailPicture, trailSummary, walkOutput, walkRead, walkRequest,
 } from './ask_model.js';
 
 const KIND_LABEL = { hit: 'retrieved', folded: 'pointer (folded)', neighbor: 'one hop away', read: 'read in full', walk: 'walked', cited: 'cited in the answer', ctx: 'other connection', bank: '' };
@@ -49,19 +52,20 @@ export function createAskView(ctx) {
   let userMoved = false;         // the user rotated/zoomed since the last picture change
 
   // ── controls ───────────────────────────────────────────────────────────────
-  const questionInput = h('input', { class: 'kbx-input', type: 'text', placeholder: 'Ask the bank a question, e.g. “How does the client quote a rush order?”', dataset: { role: 'ask-question' } });
-  const modelSel = h('select', { class: 'kbx-select', dataset: { role: 'ask-model' } });
-  const reasoningSel = h('select', { class: 'kbx-select', dataset: { role: 'ask-reasoning' }, title: 'How much the model thinks before each step (gpt-6 family: none / low / medium)' },
+  const questionInput = h('input', { class: 'kbx-input', type: 'text', placeholder: 'Ask the bank a question, e.g. “How does the client quote a rush order?”', dataset: { role: 'ask-question', action: 'ask_question', recordValue: 'question' } });
+  const modelSel = h('select', { class: 'kbx-select', dataset: { role: 'ask-model', action: 'ask_model', recordValue: 'model' } });
+  const reasoningSel = h('select', { class: 'kbx-select', dataset: { role: 'ask-reasoning', action: 'ask_reasoning', recordValue: 'reasoning' }, title: 'How much the model thinks before each step (gpt-6 family: none / low / medium)' },
     ...REASONING.map((r) => h('option', { value: r }, r)));
   const stepsInput = h('input', { class: 'kbx-input', type: 'number', min: '1', max: '12', value: '8', title: 'Model turns before it must answer', dataset: { role: 'ask-max-steps' } });
-  const autoCb = h('input', { type: 'checkbox', checked: true, dataset: { role: 'ask-auto' } });
-  const focusSel = h('select', { class: 'kbx-select', dataset: { role: 'ask-focus' }, title: 'What happens to the entries the model has not touched' },
+  const autoCb = h('input', { type: 'checkbox', checked: true, dataset: { role: 'ask-auto', action: 'ask_auto_toggle', recordValue: 'auto' } });
+  const focusSel = h('select', { class: 'kbx-select', dataset: { role: 'ask-focus', action: 'ask_focus', recordValue: 'focus' }, title: 'What happens to the entries the model has not touched' },
     h('option', { value: 'shrink' }, 'shrink the rest'), h('option', { value: 'only' }, 'touched only'), h('option', { value: 'dim' }, 'dim the rest'));
-  const backfillCb = h('input', { type: 'checkbox', checked: true, dataset: { role: 'ask-hide-backfill' } });
-  const askBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', dataset: { role: 'ask-run' }, onClick: () => ask() }, h('i', { class: 'bi bi-play-fill' }), 'Ask');
-  const stopBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { role: 'ask-stop' }, disabled: true, onClick: () => stop() }, h('i', { class: 'bi bi-stop-fill' }), 'Stop');
-  const runsSel = h('select', { class: 'kbx-select', dataset: { role: 'ask-runs' }, title: 'Replay a past run from the audit trail', style: { maxWidth: '260px' } }, h('option', { value: '' }, 'Replay a past run…'));
+  const backfillCb = h('input', { type: 'checkbox', checked: true, dataset: { role: 'ask-hide-backfill', action: 'ask_hide_backfill_toggle', recordValue: 'hide_backfill' } });
+  const askBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', dataset: { role: 'ask-run', action: 'ask_run', outcome: 'request' }, onClick: () => ask() }, h('i', { class: 'bi bi-play-fill' }), 'Ask');
+  const stopBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { role: 'ask-stop', action: 'ask_stop' }, disabled: true, onClick: () => stop() }, h('i', { class: 'bi bi-stop-fill' }), 'Stop');
+  const runsSel = h('select', { class: 'kbx-select', dataset: { role: 'ask-runs', action: 'ask_replay_run', recordValue: 'run_id' }, title: 'Replay a past run from the audit trail', style: { maxWidth: '260px' } }, h('option', { value: '' }, 'Replay a past run…'));
   const unavailable = h('div', { class: 'kbx-alert warn', dataset: { role: 'ask-unavailable' }, style: { display: 'none' } });
+  const toolsLine = h('div', { class: 'kbx-muted', style: { fontSize: '12px', display: 'none' }, dataset: { role: 'ask-tools' } });
   questionInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') ask(); });
   [modelSel, reasoningSel, stepsInput, autoCb].forEach((i) => i.addEventListener('change', saveSettings));
   [focusSel, backfillCb].forEach((i) => i.addEventListener('change', () => { saveSettings(); paint(); }));
@@ -69,7 +73,7 @@ export function createAskView(ctx) {
 
   const toolbar = h('div', { class: 'kbx-card' },
     h('div', { class: 'kbx-card-head' },
-      h('div', {}, h('h3', { class: 'kbx-card-title' }, 'Ask'), h('div', { class: 'kbx-card-sub' }, 'A small model answers from this bank alone. Watch it search, read, follow pointers and walk the graph; everything it touches lights up on the right.')),
+      h('div', {}, h('h3', { class: 'kbx-card-title' }, 'Ask'), h('div', { class: 'kbx-card-sub' }, 'A small model answers from this bank alone, with the same tools an agent on the bank\u2019s MCP mount has. Watch it query, read entries and playbooks and follow connections; everything it touches lights up on the right.'), toolsLine),
       h('div', { class: 'kbx-row', style: { gap: '6px' } }, runsSel, stopBtn, askBtn)),
     unavailable,
     h('div', { class: 'kbx-map-toolbar' },
@@ -91,7 +95,7 @@ export function createAskView(ctx) {
   const overlay = h('div', { class: 'kbx-map-overlay', style: { display: 'none' } });
   const caption = h('span', { class: 'kbx-chip muted', dataset: { role: 'ask-caption' } }, '…');
   const hud = h('div', { class: 'kbx-map-hud' }, caption,
-    h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Fit', dataset: { role: 'ask-fit' }, onClick: () => fitLit(fg) }, h('i', { class: 'bi bi-arrows-fullscreen' })));
+    h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Fit', dataset: { role: 'ask-fit', action: 'ask_graph_fit' }, onClick: () => fitLit(fg) }, h('i', { class: 'bi bi-arrows-fullscreen' })));
   const legend = h('div', { class: 'kbx-map-legend kbx-graph-legend' },
     h('span', {}, h('i', { class: 'g-hit' }), 'searched (#rank)'),
     h('span', {}, h('i', { class: 'g-folded' }), 'pointer: folded'),
@@ -181,7 +185,9 @@ export function createAskView(ctx) {
   async function executeTools(stepNo) {
     const st = trail.steps.find((s) => s.no === stepNo);
     if (!st) return;
-    for (const c of st.calls) {
+    const mine = st.calls.filter((c) => isLegacyTool(c.call.name) || c.call.known === false);
+    const mount = st.calls.filter((c) => !mine.includes(c));
+    for (const c of mine) {
       if (stopped) return;
       trail = setCallResult(trail, stepNo, c.call.call_id, { state: 'running' });
       renderTimeline();
@@ -195,10 +201,27 @@ export function createAskView(ctx) {
       renderTimeline();
       await paint('auto');
     }
+    if (!mount.length || stopped) return;
+    // The mount's tools run on the host (the bank's MCP server), all of this step's at once.
+    const ids = mount.map((c) => c.call.call_id);
+    ids.forEach((id) => { trail = setCallResult(trail, stepNo, id, { state: 'running' }); });
+    renderTimeline();
+    const t0 = performance.now();
+    try {
+      const res = await api.askExecute(trail.runId, executeBody(ids));
+      trail = applyExecuteOutputs(trail, stepNo, res && res.outputs, ids);
+    } catch (e) {
+      const failure = stepFailure(e);
+      ids.forEach((id) => { trail = setCallResult(trail, stepNo, id, { state: 'error', error: `the mount did not run this call: ${failure.message}`, durationMs: performance.now() - t0 }); });
+    }
+    renderTimeline();
+    await paint('auto');
   }
 
+  function knownToolNames() { return mountTools(config).map((t) => t.name); }
+
   async function runTool(call) {
-    if (call.known === false) throw new Error(`unknown tool ${call.name}; the agent only has ${Object.values(TOOLS).join(', ')}`);
+    if (call.known === false) throw new Error(`unknown tool ${call.name}; the agent only has ${(knownToolNames().length ? knownToolNames() : Object.values(TOOLS)).join(', ')}`);
     if (call.name === TOOLS.search) return searchOutput(await api.search(searchRequest(call.arguments, ctx.getSchema())));
     if (call.name === TOOLS.read) {
       const { entryId } = readRequest(call.arguments);
@@ -271,7 +294,7 @@ export function createAskView(ctx) {
       items.push(h('div', { class: 'kbx-ask-live', dataset: { role: 'ask-live' } }, h('span', { class: 'kbx-spinner' }), trail.steps.length ? 'The model is reading the results…' : 'The model is reading the question…'));
     } else if ((live === 'next' || !busy) && pendingStep(trail) && !stopped) {
       items.push(h('div', { class: 'kbx-ask-live' },
-        h('button', { class: 'kbx-btn kbx-btn-primary kbx-btn-sm', type: 'button', dataset: { role: 'ask-next' }, onClick: () => continueRun() }, h('i', { class: 'bi bi-skip-end-fill' }), 'Next step'),
+        h('button', { class: 'kbx-btn kbx-btn-primary kbx-btn-sm', type: 'button', dataset: { role: 'ask-next', action: 'ask_next_step', outcome: 'request' }, onClick: () => continueRun() }, h('i', { class: 'bi bi-skip-end-fill' }), 'Next step'),
         h('span', {}, 'Tool results are in; continue when ready.')));
     }
     if (trail.status === 'abandoned') items.push(h('div', { class: 'kbx-alert', dataset: { role: 'ask-abandoned' } }, 'Stopped. The run is recorded as abandoned.'));
@@ -283,7 +306,7 @@ export function createAskView(ctx) {
     const alert = h('div', { class: 'kbx-alert danger', dataset: { role: 'ask-failed' } }, `The run failed: ${t.error}`);
     if (!t.errorDetail) return alert;
     const pre = h('pre', { class: 'kbx-graph-raw', style: { display: 'none' }, dataset: { role: 'ask-failed-detail' } }, t.errorDetail);
-    const btn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { role: 'ask-failed-toggle' }, onClick: () => { const on = pre.style.display === 'none'; pre.style.display = on ? 'block' : 'none'; btn.textContent = on ? 'Hide details' : 'Details'; } }, 'Details');
+    const btn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { role: 'ask-failed-toggle', action: 'ask_failed_details_toggle' }, onClick: () => { const on = pre.style.display === 'none'; pre.style.display = on ? 'block' : 'none'; btn.textContent = on ? 'Hide details' : 'Details'; } }, 'Details');
     return h('div', {}, alert, h('div', { class: 'kbx-row', style: { gap: '6px', marginTop: '6px' } }, btn), pre);
   }
 
@@ -295,26 +318,27 @@ export function createAskView(ctx) {
     st.thinking.forEach((t) => parts.push(h('div', { class: 'kbx-ask-think' }, h('i', { class: 'bi bi-chat-left-dots' }), ' ', t)));
     st.calls.forEach((c) => parts.push(renderCall(c)));
     if (st.answer) {
-      const segs = citationSegments(st.answer, trail.citations, Object.keys(bankEnds));
-      parts.push(h('div', { class: 'kbx-ask-answer', dataset: { role: 'ask-answer' } }, ...segs.map((s) => (s.cite
-        ? h('span', { class: 'kbx-cite', title: s.cite, dataset: { role: 'ask-cite', entryId: s.cite }, onClick: (e) => { e.stopPropagation(); focusId(s.cite); } }, s.label)
-        : document.createTextNode(s.text)))));
+      const refs = trailKnownRefs(trail);
+      const segs = citationSegments(st.answer, trail.citations, [...Object.keys(bankEnds), ...refs.ids], refs.slugs);
+      parts.push(h('div', { class: 'kbx-ask-answer', dataset: { role: 'ask-answer' } }, ...segs.map((s) => {
+        if (!s.cite) return document.createTextNode(s.text);
+        if (s.slug) return h('span', { class: 'kbx-cite', title: `playbook ${s.cite} (see the Playbooks tab)`, dataset: { role: 'ask-cite', slug: s.cite, action: 'ask_cite_playbook', targetSlug: s.cite }, onClick: (e) => { e.stopPropagation(); toast(`Playbook ${s.cite}: open it on the Playbooks tab.`, 'info'); } }, s.label);
+        return h('span', { class: 'kbx-cite', title: s.cite, dataset: { role: 'ask-cite', entryId: s.cite, action: 'ask_cite_open', targetEntryId: s.cite }, onClick: (e) => { e.stopPropagation(); focusId(s.cite); } }, s.label);
+      })));
       if (st.status === 'step_limit') parts.push(h('div', { class: 'kbx-muted', style: { fontSize: '12px', marginTop: '4px' } }, 'The model reached its step limit and was told to answer with what it had.'));
     }
     if (st.error) parts.push(h('div', { class: 'kbx-alert danger', style: { marginTop: '6px' } }, st.error));
     const raw = rawByStep[st.no];
     if (raw) {
       const pre = h('pre', { class: 'kbx-graph-raw', style: { display: 'none' } }, JSON.stringify(raw, null, 2));
-      const btn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', onClick: (e) => { e.stopPropagation(); const on = pre.style.display === 'none'; pre.style.display = on ? 'block' : 'none'; btn.textContent = on ? 'Hide raw step' : 'Raw step'; } }, 'Raw step');
+      const btn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { action: 'ask_raw_step_toggle' }, onClick: (e) => { e.stopPropagation(); const on = pre.style.display === 'none'; pre.style.display = on ? 'block' : 'none'; btn.textContent = on ? 'Hide raw step' : 'Raw step'; } }, 'Raw step');
       parts.push(h('div', { class: 'kbx-row', style: { gap: '6px', marginTop: '6px' } }, btn), pre);
     }
     return h('div', { class: `kbx-ask-step${isFocus ? ' is-focus' : ''}`, dataset: { role: 'ask-step', step: String(st.no) } }, ...parts);
   }
 
   function renderCall(c) {
-    const a = c.call.arguments || {};
-    const argText = c.call.name === TOOLS.search ? `“${a.query || ''}”${a.k ? ` · k=${a.k}` : ''}` : c.call.name === TOOLS.read ? String(a.entry_id || a.id || '') : c.call.name === TOOLS.walk ? `${a.root || ''}${a.depth ? ` · depth ${a.depth}` : ''}` : JSON.stringify(a);
-    const headParts = [h('span', { class: 'kbx-chip tool' }, c.call.name), h('span', { class: 'kbx-mono', style: { fontSize: '12px' } }, argText)];
+    const headParts = [h('span', { class: 'kbx-chip tool' }, c.call.name), h('span', { class: 'kbx-mono', style: { fontSize: '12px' } }, callArgText(c.call))];
     if (c.state === 'running') headParts.push(h('span', { class: 'kbx-spinner' }));
     else if (c.state === 'error') headParts.push(h('span', { class: 'kbx-chip danger' }, 'failed'));
     else if (c.state === 'done' && c.durationMs) headParts.push(h('span', { class: 'kbx-muted', style: { fontSize: '11px' } }, `${Math.round(c.durationMs)} ms`));
@@ -329,28 +353,48 @@ export function createAskView(ctx) {
       h('span', { class: 'kbx-mono kbx-muted', style: { fontSize: '11px' } }, `${String(id || '').slice(0, 8)} `), text, extra || null);
   }
 
+  function playbookChip(p) {
+    return h('div', { class: 'kbx-ptr folded', title: p.hint || p.slug, dataset: { role: 'ask-playbook', slug: p.slug } }, `playbook ${p.slug}${p.title && p.title !== p.slug ? ` — ${p.title}` : ''}`);
+  }
+
   function renderOutput(name, out) {
-    if (name === TOOLS.search) {
-      const rows = (out.results || []).map((r) => row(r.id, 'hit', `#${r.rank} ${r.summary || r.useful_for || String(r.content || '').slice(0, 140)}`,
-        (r.related || []).length ? h('div', { class: 'kbx-graph-ptrs', style: { marginTop: '4px' } }, ...r.related.map((p) => h('div', { class: `kbx-ptr ${p.kind === 'neighbor' ? 'neighbor' : 'folded'}`, title: p.id, dataset: { entryId: p.id }, onClick: (e) => { e.stopPropagation(); focusId(p.id); } }, pointerLine(p)))) : null));
-      if (!rows.length) rows.push(h('div', { class: 'kbx-hint' }, 'No results.'));
+    const kind = toolKind(name);
+    if (kind === 'search') {
+      const rows = searchRows(out).map((r) => row(r.id, 'hit', `#${r.rank} ${r.text || String(r.id).slice(0, 8)}`,
+        r.related.length ? h('div', { class: 'kbx-graph-ptrs', style: { marginTop: '4px' } }, ...r.related.filter((p) => p && p.id).map((p) => h('div', { class: `kbx-ptr ${p.kind === 'neighbor' ? 'neighbor' : 'folded'}`, title: p.id, dataset: { entryId: p.id }, onClick: (e) => { e.stopPropagation(); focusId(p.id); } }, pointerLine(p)))) : null));
+      const playbooks = matchedPlaybooks(out);
+      if (!rows.length && !playbooks.length) rows.push(h('div', { class: 'kbx-hint' }, 'No results.'));
       else if (out.collapse) rows.push(h('div', { class: 'kbx-muted', style: { fontSize: '11px' } }, `collapse: ${out.collapse.groups} group${out.collapse.groups === 1 ? '' : 's'}, ${out.collapse.folded} folded, ${out.collapse.neighbors} neighbor${out.collapse.neighbors === 1 ? '' : 's'}`));
+      if (playbooks.length) rows.push(h('div', { class: 'kbx-graph-ptrs', style: { marginTop: '4px' }, dataset: { role: 'ask-matched-playbooks' } }, ...playbooks.map(playbookChip)));
       return rows;
     }
-    if (name === TOOLS.read) {
-      const rows = [row(out.id, 'read', out.summary || out.useful_for || String(out.content || '').slice(0, 160))];
-      (out.connections || []).forEach((k) => rows.push(h('div', { class: 'kbx-ptr neighbor', title: k.id, dataset: { entryId: k.id }, onClick: (e) => { e.stopPropagation(); if (k.kind !== 'playbook_step') focusId(k.id); } },
+    if (kind === 'read') {
+      const e = readEntry(out);
+      if (!e) return [h('pre', { class: 'kbx-graph-raw' }, JSON.stringify(out, null, 2))];
+      const rows = [row(e.id, 'read', e.text || String(e.id).slice(0, 8))];
+      e.connections.forEach((k) => rows.push(h('div', { class: 'kbx-ptr neighbor', title: k.id, dataset: { entryId: k.id }, onClick: (ev) => { ev.stopPropagation(); if (k.kind !== 'playbook_step') focusId(k.id); } },
         `${String(k.relation || '').replace(/_/g, ' ')} ${k.direction === 'incoming' ? '←' : '→'} ${k.kind === 'playbook_step' ? `step ${k.playbook}/${k.step}` : (k.text || String(k.id || '').slice(0, 8))}${k.note ? ` — ${k.note}` : ''}`)));
-      if (!(out.connections || []).length) rows.push(h('div', { class: 'kbx-muted', style: { fontSize: '11px' } }, 'No connections on this entry.'));
+      if (!e.connections.length) rows.push(h('div', { class: 'kbx-muted', style: { fontSize: '11px' } }, 'No connections on this entry.'));
       return rows;
     }
-    if (name === TOOLS.walk) {
-      const nodes = out.nodes || []; const edges = out.edges || [];
-      const rows = [h('div', { class: 'kbx-muted', style: { fontSize: '11px' } }, `${nodes.length} entr${nodes.length === 1 ? 'y' : 'ies'} within ${out.depth || 1} hop${(out.depth || 1) === 1 ? '' : 's'} · ${edges.length} edge${edges.length === 1 ? '' : 's'}${out.truncated ? ' · cut short by the node cap' : ''}`)];
-      nodes.filter((n) => n.depth > 0 && n.kind !== 'playbook_step').slice(0, 24).forEach((n) => rows.push(row(n.id, 'walk', `${n.depth} hop${n.depth === 1 ? '' : 's'} · ${n.text || ''}`)));
-      edges.slice(0, 40).forEach((e) => rows.push(h('div', { class: 'kbx-ptr muted' }, `${String(e.from || '').slice(0, 8)} ${String(e.relation || '').replace(/_/g, ' ')} → ${String(e.to || '').slice(0, 8)}${e.note ? ` — ${e.note}` : ''}`)));
+    if (kind === 'playbook') {
+      const pb = playbookRead(out);
+      if (!pb) return [h('pre', { class: 'kbx-graph-raw' }, JSON.stringify(out, null, 2))];
+      const rows = [h('div', { class: 'kbx-ask-row read', dataset: { role: 'ask-playbook-read', slug: pb.slug } }, h('b', {}, pb.title), h('span', { class: 'kbx-mono kbx-muted', style: { fontSize: '11px' } }, ` ${pb.slug}`))];
+      pb.steps.slice(0, 30).forEach((st) => rows.push(h('div', { class: 'kbx-ptr muted', dataset: { role: 'ask-playbook-step' } }, `${st.key}${st.kind && st.kind !== 'action' ? ` (${st.kind})` : ''} · ${st.title}`)));
+      pb.entries.forEach((e) => rows.push(row(e.id, 'read', `${e.step ? `step ${e.step} cites · ` : ''}${e.text || String(e.id).slice(0, 8)}${e.note ? ` — ${e.note}` : ''}`)));
+      if (!pb.steps.length) rows.push(h('div', { class: 'kbx-muted', style: { fontSize: '11px' } }, 'No steps on this playbook.'));
       return rows;
     }
+    if (kind === 'walk') {
+      const w = walkRead(out);
+      const rows = [h('div', { class: 'kbx-muted', style: { fontSize: '11px' } }, `${w.nodes.length} entr${w.nodes.length === 1 ? 'y' : 'ies'} within ${w.depth} hop${w.depth === 1 ? '' : 's'} · ${w.edges.length} edge${w.edges.length === 1 ? '' : 's'}${w.truncated ? ' · cut short by the node cap' : ''}`)];
+      w.nodes.filter((n) => n.depth > 0).slice(0, 24).forEach((n) => rows.push(row(n.id, 'walk', `${n.depth} hop${n.depth === 1 ? '' : 's'} · ${n.text || ''}`)));
+      w.edges.slice(0, 40).forEach((e) => rows.push(h('div', { class: 'kbx-ptr muted' }, `${String(e.from || '').slice(0, 8)} ${String(e.relation || '').replace(/_/g, ' ')} → ${String(e.to || '').slice(0, 8)}${e.note ? ` — ${e.note}` : ''}`)));
+      return rows;
+    }
+    const playbooks = matchedPlaybooks(out);
+    if (playbooks.length) return [h('div', { class: 'kbx-graph-ptrs' }, ...playbooks.map(playbookChip))];
     return [h('pre', { class: 'kbx-graph-raw' }, JSON.stringify(out, null, 2))];
   }
 
@@ -398,7 +442,7 @@ export function createAskView(ctx) {
   }
 
   function focusId(id) {
-    if (!fg) return;
+    if (!fg || !isEntryId(id)) return;
     const n = fg.graphData().nodes.find((x) => x.id === id);
     if (n) selectNode(n); else openEntryDetail(ctx, id);
   }
@@ -420,7 +464,7 @@ export function createAskView(ctx) {
       h('div', { class: 'kbx-graph-selected-text' }, labelFor(entry)),
       entry.useful_for && labelFor(entry) !== entry.useful_for ? h('div', { class: 'kbx-muted', style: { fontSize: '12px', marginTop: '4px' } }, entry.useful_for) : null,
       h('div', { class: 'kbx-row', style: { gap: '6px', marginTop: '8px' } },
-        h('button', { class: 'kbx-btn kbx-btn-sm kbx-btn-primary', type: 'button', dataset: { role: 'ask-open-entry' }, onClick: () => openEntryDetail(ctx, n.id) }, 'Open entry')),
+        h('button', { class: 'kbx-btn kbx-btn-sm kbx-btn-primary', type: 'button', dataset: { role: 'ask-open-entry', action: 'entry_open', targetEntryId: n.id, outcome: 'open' }, onClick: () => openEntryDetail(ctx, n.id) }, 'Open entry')),
       links.length ? h('div', { class: 'kbx-graph-ptrs', style: { marginTop: '8px' } }, ...links.slice(0, 30).map((l) => {
         const src = l.source.id || l.source; const tgt = l.target.id || l.target; const other = src === n.id ? tgt : src;
         return h('div', { class: `kbx-ptr ${l.pointer ? 'folded' : 'muted'}` }, `${String(l.relation || '').replace(/_/g, ' ')} ${src === n.id ? '→' : '←'} ${labelFor(bankEnds[other]) || String(other).slice(0, 8)}${l.note ? ` — ${l.note}` : ''}`);
@@ -473,6 +517,10 @@ export function createAskView(ctx) {
       config = await api.askConfig();
       clear(modelSel);
       (config.models || []).forEach((m) => modelSel.append(h('option', { value: m }, m)));
+      const line = mountLine(config);
+      toolsLine.textContent = line;
+      toolsLine.title = mountTools(config).map((t) => `${t.name}: ${t.description}`).join('\n');
+      toolsLine.style.display = line ? '' : 'none';
       if (!config.available) { unavailable.textContent = `Ask is not available on this bank: ${config.unavailable_reason || 'no model credential'}`; unavailable.style.display = ''; }
       else unavailable.style.display = 'none';
     } catch (e) {

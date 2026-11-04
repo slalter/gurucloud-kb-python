@@ -16,7 +16,7 @@ export function openModal({ title, body, footer = [], wide = false }) {
   const titleEl = h('h3', { class: 'kbx-dialog-title' }, title || '');
   const head = h('div', { class: 'kbx-dialog-head' },
     titleEl,
-    h('button', { class: 'kbx-dialog-close', 'aria-label': 'Close', type: 'button', onClick: close }, '×'));
+    h('button', { class: 'kbx-dialog-close', 'aria-label': 'Close', type: 'button', dataset: { action: 'dialog_close' }, onClick: close }, '×'));
 
   const bodyWrap = h('div', { class: 'kbx-dialog-body' });
   if (body) bodyWrap.append(body.nodeType ? body : document.createTextNode(String(body)));
@@ -52,9 +52,10 @@ export function confirmModal({ title, message, confirmLabel = 'Delete', danger =
     const confirmBtn = h('button', {
       class: `kbx-btn ${danger ? 'kbx-btn-danger' : 'kbx-btn-primary'}`,
       type: 'button',
+      dataset: { action: 'dialog_confirm' },
       onClick: () => finish(true),
     }, confirmLabel);
-    const cancelBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', onClick: () => finish(false) }, 'Cancel');
+    const cancelBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { action: 'dialog_cancel' }, onClick: () => finish(false) }, 'Cancel');
     const ref = openModal({
       title,
       body: h('div', {}, typeof message === 'string' ? h('p', { style: { margin: 0, lineHeight: '1.55' } }, message) : message),

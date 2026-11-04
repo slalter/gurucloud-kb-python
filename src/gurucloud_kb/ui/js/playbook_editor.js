@@ -23,7 +23,7 @@ export function openPlaybookEditor(ctx, existing, { prefill = null, onSaved, gen
   const isEdit = !!existing;
   const seed = existing || prefill || {};
   let genre = isEdit ? genreOf(existing) : (genreOpt === GENRE_PROCESS ? GENRE_PROCESS : GENRE_PROCEDURE);
-  const genreSel = h('select', { class: 'kbx-select', dataset: { role: 'genre' } },
+  const genreSel = h('select', { class: 'kbx-select', dataset: { role: 'genre', action: 'playbook_editor_genre', recordValue: 'genre' } },
     h('option', { value: GENRE_PROCEDURE }, 'Playbook — a procedure an agent follows'),
     h('option', { value: GENRE_PROCESS }, 'Process — documentation of how the client operates'));
   genreSel.value = genre;
@@ -44,7 +44,7 @@ export function openPlaybookEditor(ctx, existing, { prefill = null, onSaved, gen
   }
   genreSel.addEventListener('change', () => { genre = genreSel.value === GENRE_PROCESS ? GENRE_PROCESS : GENRE_PROCEDURE; syncGenre(); });
   const summaryInput = h('textarea', { class: 'kbx-textarea', rows: '2', placeholder: 'Optional one-line summary' }, seed.summary || '');
-  const statusSel = h('select', { class: 'kbx-select' },
+  const statusSel = h('select', { class: 'kbx-select', dataset: { action: 'playbook_editor_status', recordValue: 'status' } },
     h('option', { value: 'active' }, 'Active'), h('option', { value: 'draft' }, 'Draft'), h('option', { value: 'superseded' }, 'Superseded'));
   statusSel.value = seed.status || 'active';
   const noteInput = h('input', { class: 'kbx-input', placeholder: 'Change note (optional)', value: prefill && !isEdit ? 'created from entry in the explorer' : '' });
@@ -58,7 +58,7 @@ export function openPlaybookEditor(ctx, existing, { prefill = null, onSaved, gen
     const bodyI = h('textarea', { class: 'kbx-textarea', rows: '3', placeholder: 'What to do in this step' }, step ? step.body || '' : '');
     const entryI = h('input', { class: 'kbx-input kbx-mono', placeholder: 'Linked KB entry id (optional)', value: step && step.kb_entry_id ? step.kb_entry_id : '' });
     const keyI = h('input', { class: 'kbx-input kbx-mono', placeholder: 'Key (optional, e.g. GAS-002)', value: step && step.key ? step.key : '', dataset: { role: 'step-key' } });
-    const kindSel = h('select', { class: 'kbx-select', dataset: { role: 'step-kind' } }, ...STEP_KINDS.map((k) => h('option', { value: k }, KIND_LABEL[k])));
+    const kindSel = h('select', { class: 'kbx-select', dataset: { role: 'step-kind', action: 'playbook_editor_step_kind', recordValue: 'kind' } }, ...STEP_KINDS.map((k) => h('option', { value: k }, KIND_LABEL[k])));
     kindSel.value = stepKind(step);
     const transHost = h('div', { dataset: { role: 'transitions' } });
     const detail = processDetailOf(step);
@@ -72,12 +72,12 @@ export function openPlaybookEditor(ctx, existing, { prefill = null, onSaved, gen
       h('div', { class: 'kbx-field-row', style: { marginBottom: 0 } }, h('div', { class: 'kbx-field', style: { marginBottom: 0 } }, processInputs.exceptions), h('div', { class: 'kbx-field', style: { marginBottom: 0 } }, processInputs.source)));
     const row = { id: ++rowSeq, titleI, bodyI, entryI, keyI, kindSel, transHost, processInputs, processBlock, transitions: [], seedNext: transitionsOf(step) };
     stepRows.push(row);
-    const addTransBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { role: 'add-transition' }, onClick: () => addTransition(row, null, null) }, h('i', { class: 'bi bi-plus-lg' }), 'Add transition');
+    const addTransBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { role: 'add-transition', action: 'playbook_editor_transition_add' }, onClick: () => addTransition(row, null, null) }, h('i', { class: 'bi bi-plus-lg' }), 'Add transition');
     row.transBlock = h('div', { class: 'kbx-field', style: { marginTop: '8px', marginBottom: 0 } },
       h('div', { class: 'kbx-row-between' }, h('span', { class: 'kbx-hint' }, 'Transitions (leave empty to continue to the next step)'), addTransBtn), transHost);
-    const removeBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Remove step', onClick: () => removeStep(row) }, h('i', { class: 'bi bi-x-lg' }));
-    const upBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Move up', onClick: () => move(row, -1) }, h('i', { class: 'bi bi-arrow-up' }));
-    const downBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Move down', onClick: () => move(row, 1) }, h('i', { class: 'bi bi-arrow-down' }));
+    const removeBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Remove step', dataset: { action: 'playbook_editor_step_remove' }, onClick: () => removeStep(row) }, h('i', { class: 'bi bi-x-lg' }));
+    const upBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Move up', dataset: { action: 'playbook_editor_step_up' }, onClick: () => move(row, -1) }, h('i', { class: 'bi bi-arrow-up' }));
+    const downBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Move down', dataset: { action: 'playbook_editor_step_down' }, onClick: () => move(row, 1) }, h('i', { class: 'bi bi-arrow-down' }));
     const node = h('div', { class: 'kbx-card', dataset: { role: 'step-row' }, style: { padding: '12px', marginBottom: '10px', background: 'var(--kbx-surface-2)', boxShadow: 'none' } },
       h('div', { class: 'kbx-row-between', style: { marginBottom: '8px' } }, h('span', { class: 'kbx-chip', dataset: { role: 'stepnum' } }, '#'), h('div', { class: 'kbx-row', style: { gap: '4px' } }, upBtn, downBtn, removeBtn)),
       h('div', { class: 'kbx-field-row', style: { marginBottom: '8px' } }, h('div', { class: 'kbx-field', style: { marginBottom: 0 } }, kindSel), h('div', { class: 'kbx-field', style: { marginBottom: 0 } }, keyI)),
@@ -98,11 +98,11 @@ export function openPlaybookEditor(ctx, existing, { prefill = null, onSaved, gen
   }
   function syncKind(row) { row.transBlock.style.display = row.kindSel.value === 'end' ? 'none' : ''; }
   function addTransition(row, target, t) {
-    const sel = h('select', { class: 'kbx-select', dataset: { role: 'transition-target' }, 'aria-label': 'Go to step' });
+    const sel = h('select', { class: 'kbx-select', dataset: { role: 'transition-target', action: 'playbook_editor_transition_target', recordValue: 'target_step' }, 'aria-label': 'Go to step' });
     const whenI = h('input', { class: 'kbx-input', dataset: { role: 'transition-when' }, placeholder: 'When… (condition, optional)', value: t && t.when ? t.when : '' });
     const limitI = h('input', { class: 'kbx-input', type: 'number', min: '1', step: '1', dataset: { role: 'transition-limit' }, placeholder: 'Max loops', value: t && t.limit != null ? String(t.limit) : '', style: { maxWidth: '110px' } });
     const tr = { target, sel, whenI, limitI };
-    const delBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Remove transition', dataset: { role: 'remove-transition' }, onClick: () => dropTransition(row, tr) }, h('i', { class: 'bi bi-x-lg' }));
+    const delBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Remove transition', dataset: { role: 'remove-transition', action: 'playbook_editor_transition_remove' }, onClick: () => dropTransition(row, tr) }, h('i', { class: 'bi bi-x-lg' }));
     tr.node = h('div', { class: 'kbx-row', dataset: { role: 'transition' }, style: { gap: '6px', marginTop: '6px' } }, h('i', { class: 'bi bi-arrow-return-right' }), sel, whenI, limitI, delBtn);
     sel.addEventListener('change', () => { tr.target = stepRows.find((r) => String(r.id) === sel.value) || null; });
     row.transitions.push(tr);
@@ -182,14 +182,14 @@ export function openPlaybookEditor(ctx, existing, { prefill = null, onSaved, gen
     h('div', { class: 'kbx-field' }, h('label', {}, 'Title'), titleInput),
     h('div', { class: 'kbx-field' }, whenLabel, whenInput),
     h('div', { class: 'kbx-field' }, h('label', {}, 'Summary'), summaryInput),
-    h('div', { class: 'kbx-row-between kbx-mt' }, h('h4', { style: { margin: 0, fontSize: '14px' } }, 'Steps'), h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', onClick: () => addStep(null) }, h('i', { class: 'bi bi-plus-lg' }), 'Add step')),
+    h('div', { class: 'kbx-row-between kbx-mt' }, h('h4', { style: { margin: 0, fontSize: '14px' } }, 'Steps'), h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { action: 'playbook_editor_step_add' }, onClick: () => addStep(null) }, h('i', { class: 'bi bi-plus-lg' }), 'Add step')),
     h('div', { class: 'kbx-mt' }, noticeHost, stepsHost),
     h('div', { class: 'kbx-field kbx-mt' }, h('label', {}, 'Change note'), noteInput),
     overlapHost);
 
   syncGenre();
-  const saveBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button' }, isEdit ? 'Save changes' : 'Create');
-  const ref = openModal({ title: isEdit ? `Edit "${existing.title}"` : (prefill ? 'New playbook from entry' : 'New playbook or process'), wide: true, body, footer: [h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', onClick: () => ref.close() }, 'Cancel'), saveBtn] });
+  const saveBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', dataset: { action: isEdit ? 'playbook_editor_save' : 'playbook_editor_create', outcome: 'request' } }, isEdit ? 'Save changes' : 'Create');
+  const ref = openModal({ title: isEdit ? `Edit "${existing.title}"` : (prefill ? 'New playbook from entry' : 'New playbook or process'), wide: true, body, footer: [h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { action: 'dialog_cancel' }, onClick: () => ref.close() }, 'Cancel'), saveBtn] });
 
   async function doSave(force) {
     const slug = slugInput.value.trim();
@@ -228,7 +228,7 @@ export function openPlaybookEditor(ctx, existing, { prefill = null, onSaved, gen
 
   function renderOverlap(details) {
     const cands = details.candidates || [];
-    const forceBtn = h('button', { class: 'kbx-btn kbx-btn-danger', type: 'button', onClick: () => doSave(true) }, 'Save anyway (override)');
+    const forceBtn = h('button', { class: 'kbx-btn kbx-btn-danger', type: 'button', dataset: { action: 'playbook_editor_save_override', outcome: 'request' }, onClick: () => doSave(true) }, 'Save anyway (override)');
     mount(overlapHost, h('div', { class: 'kbx-alert warn kbx-mt' },
       h('i', { class: 'bi bi-exclamation-triangle' }),
       h('div', {},

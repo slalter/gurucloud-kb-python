@@ -16,6 +16,8 @@ from gurucloud_kb import (
     GuruCloudClient,
     NotFoundError,
     PlaybookOverlapError,
+    PlaybookStepConflictError,
+    PlaybookVersionConflictError,
 )
 
 BASE_URL = "https://test.gurucloudai.com"
@@ -195,6 +197,51 @@ class TestSyncPlaybooks:
         assert err.slug == "pm-sweep-2" and err.threshold == 0.82
         assert err.candidates[0]["slug"] == "pm-sweep" and err.candidates[0]["similarity"] == 0.95
 
+    def test_upsert_sends_expected_version_or_base_version_merge_only_when_given(self, kb) -> None:
+        route = respx.put(f"{API_PREFIX}/banks/kb-1/playbooks/pm-sweep").mock(
+            return_value=httpx.Response(200, json={"data": {"action": "updated", "playbook": PLAYBOOK}})
+        )
+        kb.upsert_playbook("pm-sweep", title="PM sweep", when_to_use="hourly filing of cards", steps=[{"title": "a", "body": "b"}])
+        body = json.loads(route.calls.last.request.content)
+        assert not ({"expected_version", "base_version", "merge"} & set(body))
+        kb.upsert_playbook("pm-sweep", title="PM sweep", when_to_use="hourly filing of cards", steps=[{"title": "a", "body": "b"}], expected_version=2)
+        body = json.loads(route.calls.last.request.content)
+        assert body["expected_version"] == 2 and "base_version" not in body and "merge" not in body
+        out = kb.upsert_playbook("pm-sweep", title="PM sweep", when_to_use="hourly filing of cards", steps=[{"title": "a", "body": "b"}], base_version=2, merge=True)
+        body = json.loads(route.calls.last.request.content)
+        assert body["base_version"] == 2 and body["merge"] is True and "expected_version" not in body
+        assert out.get("action") == "updated"
+
+    def test_version_conflict_raises_typed_error_with_live_version_and_changed_keys(self, kb) -> None:
+        respx.put(f"{API_PREFIX}/banks/kb-1/playbooks/pm-sweep").mock(return_value=httpx.Response(409, json={"error": {
+            "code": "version_conflict", "message": "moved on",
+            "details": {"error": "version_conflict", "slug": "pm-sweep", "expected_version": 2, "live_version": 4, "changed_keys": ["GAS-002"]},
+        }}))
+        with pytest.raises(PlaybookVersionConflictError) as exc:
+            kb.upsert_playbook("pm-sweep", title="t", when_to_use="hourly filing", steps=[{"title": "a", "body": "b"}], expected_version=2)
+        err = exc.value
+        assert err.status_code == 409 and err.code == "version_conflict" and err.slug == "pm-sweep"
+        assert err.expected_version == 2 and err.live_version == 4 and err.changed_keys == ["GAS-002"]
+
+    def test_step_conflict_raises_typed_error_naming_the_steps(self, kb) -> None:
+        respx.put(f"{API_PREFIX}/banks/kb-1/playbooks/pm-sweep").mock(return_value=httpx.Response(409, json={"error": {
+            "code": "step_conflict", "message": "both sides",
+            "details": {"error": "step_conflict", "slug": "pm-sweep", "base_version": 2, "live_version": 4, "conflicts": ["GAS-002"]},
+        }}))
+        with pytest.raises(PlaybookStepConflictError) as exc:
+            kb.upsert_playbook("pm-sweep", title="t", when_to_use="hourly filing", steps=[{"title": "a", "body": "b"}], base_version=2, merge=True)
+        assert exc.value.code == "step_conflict" and exc.value.conflicts == ["GAS-002"] and exc.value.live_version == 4
+
+    def test_playbook_diff_sends_from_and_optional_to(self, kb) -> None:
+        diff = {"slug": "pm-sweep", "from_version": 2, "to_version": 4, "header": {}, "added": [], "removed": [],
+                "changed": [{"key": "GAS-002", "changes": {"body": {"before": "b", "after": "b2"}}}], "moved": [], "unchanged": ["GAS-001"], "identical": False}
+        route = respx.get(f"{API_PREFIX}/banks/kb-1/playbooks/pm-sweep/diff").mock(return_value=httpx.Response(200, json={"data": diff}))
+        out = kb.playbook_diff("pm-sweep", 2)
+        assert dict(route.calls.last.request.url.params) == {"from": "2"}
+        assert out.get("changed", [])[0].get("key") == "GAS-002" and out.get("to_version") == 4
+        kb.playbook_diff("pm-sweep", 2, 4)
+        assert dict(route.calls.last.request.url.params) == {"from": "2", "to": "4"}
+
     def test_delete_versions_stats(self, kb) -> None:
         respx.delete(f"{API_PREFIX}/banks/kb-1/playbooks/pm-sweep").mock(return_value=httpx.Response(200, json={"data": {"deleted": True, "slug": "pm-sweep"}}))
         respx.get(f"{API_PREFIX}/banks/kb-1/playbooks/pm-sweep/versions").mock(
@@ -242,6 +289,20 @@ class TestAsyncPlaybooks:
                 with pytest.raises(PlaybookOverlapError) as exc:
                     await kb.upsert_playbook("dup", title="t", when_to_use="hourly filing", steps=[{"title": "a", "body": "b"}])
                 assert exc.value.candidates[0]["slug"] == "pm-sweep"
+                await kb.upsert_playbook("pm-sweep", title="PM sweep", when_to_use="hourly filing of cards", steps=[{"title": "a", "body": "b"}], base_version=2, merge=True)
+                put_body = json.loads(put_route.calls.last.request.content)
+                assert put_body["base_version"] == 2 and put_body["merge"] is True
+                respx.put(f"{API_PREFIX}/banks/kb-1/playbooks/stale").mock(return_value=httpx.Response(409, json={"error": {
+                    "code": "version_conflict", "message": "moved", "details": {"slug": "stale", "expected_version": 1, "live_version": 2, "changed_keys": []},
+                }}))
+                with pytest.raises(PlaybookVersionConflictError) as vexc:
+                    await kb.upsert_playbook("stale", title="t", when_to_use="hourly filing", steps=[{"title": "a", "body": "b"}], expected_version=1)
+                assert vexc.value.live_version == 2
+                diff_route = respx.get(f"{API_PREFIX}/banks/kb-1/playbooks/pm-sweep/diff").mock(
+                    return_value=httpx.Response(200, json={"data": {"slug": "pm-sweep", "from_version": 1, "to_version": 2, "identical": True}})
+                )
+                assert (await kb.playbook_diff("pm-sweep", 1, 2)).get("identical") is True
+                assert dict(diff_route.calls.last.request.url.params) == {"from": "1", "to": "2"}
 
 
 PROCESS = {

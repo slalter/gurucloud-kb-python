@@ -127,6 +127,7 @@ export function createApi(kbId, base, opts = {}) {
     listAskRuns: (params) => req('GET', '/ask/runs', { params }),
     getAskRun: (id) => req('GET', `/ask/runs/${encodeURIComponent(id)}`),
     abandonAskRun: (id) => req('POST', `/ask/runs/${encodeURIComponent(id)}/abandon`),
+    askExecute: (id, payload) => req('POST', `/ask/runs/${encodeURIComponent(id)}/execute`, { body: payload || {} }),
     // assertions
     listAssertions: (params) => req('GET', '/assertions', { params }),
     createAssertion: (payload) => req('POST', '/assertions', { body: payload }),

@@ -11,7 +11,15 @@ from gurucloud_kb._http import HTTPClient
 from gurucloud_kb import _playbooks as _pb
 from gurucloud_kb._entries import build_entry_update
 from gurucloud_kb._playbooks import qs as _qs
-from gurucloud_kb._ask import continue_body as _ask_continue_body, execute_tool as _ask_execute_tool, start_body as _ask_start_body, tool_output_item as _ask_tool_output_item
+from gurucloud_kb._ask import (
+    continue_body as _ask_continue_body,
+    execute_body as _ask_execute_body,
+    execute_tool as _ask_execute_tool,
+    merge_outputs as _ask_merge_outputs,
+    split_calls as _ask_split_calls,
+    start_body as _ask_start_body,
+    tool_output_item as _ask_tool_output_item,
+)
 from gurucloud_kb._search import (
     apply_collapse,
     build_expanded_search,
@@ -57,6 +65,7 @@ from gurucloud_kb.types import (
     StartLayout,
     AskConfig,
     AskRun,
+    AskExecute,
     AskRunDetail,
     AskRunList,
     AskStep,
@@ -69,6 +78,7 @@ from gurucloud_kb.types import (
     SearchRequest,
     SearchResult,
     Playbook,
+    PlaybookDiff,
     PlaybookGenre,
     PlaybookList,
     PlaybookStats,
@@ -405,6 +415,7 @@ class KnowledgeBank:
         metadata_date_after: str | datetime | None = None,
         metadata_date_before: str | datetime | None = None,
         collapse: bool | Mapping[str, Any] | None = None,
+        query_source: str | None = None,
     ) -> list[SearchResult]:
         """Semantic search across the KB.
 
@@ -461,6 +472,10 @@ class KnowledgeBank:
                 default 20), ``guard_top_n`` (top hits never folded, 2) and
                 ``max_related`` (pointers per result, 6). Applies to both
                 string and dict queries.
+            query_source: Who is searching, recorded on the bank's
+                query_performance row (``agent_query``, ``sdk_ask``, ...; at
+                most 50 characters). Applies to both string and dict queries;
+                a dict query's own ``query_source`` key wins.
 
         Returns:
             List of matching entries with per-dimension and combined scores.
@@ -480,9 +495,12 @@ class KnowledgeBank:
                 metadata_date_after=metadata_date_after,
                 metadata_date_before=metadata_date_before,
                 collapse=collapse,
+                query_source=query_source,
             )
         else:
             request = apply_collapse(normalize_search_request(query), collapse)
+            if query_source is not None:
+                request.setdefault("query_source", query_source)
 
         return self._http.post(self._path("/search"), json=request)
 
@@ -950,6 +968,13 @@ class KnowledgeBank:
             body = _ask_start_body(question or "", model=model, reasoning_effort=reasoning_effort, max_steps=max_steps, requested_by=requested_by)
         return self._http.post(self._path("/ask/step"), json=body)
 
+    def ask_execute(self, run_id: str, *, call_ids: list[str] | None = None) -> AskExecute:
+        """Run the pending step's tool calls on the bank's MCP mount (the host
+        executes them server-side) and get the ``tool_outputs`` the next
+        ``ask_step`` takes: ``{run_id, step, mount, outputs}``. ``call_ids``
+        runs only the named calls (default: every pending call)."""
+        return self._http.post(self._path(f"/ask/runs/{run_id}/execute"), json=_ask_execute_body(call_ids))
+
     def ask(
         self,
         question: str,
@@ -960,33 +985,44 @@ class KnowledgeBank:
         requested_by: str | None = None,
         on_step: Callable[[AskStep], None] | None = None,
     ) -> AskStep:
-        """Ask the bank a question and let a small model work it step by step:
-        it searches, reads entries, follows pointers and walks the graph
-        through this client, then answers with ``[id]`` citations::
+        """Ask the bank a question and let a small model work it step by step
+        with the bank's MCP mount tools — it queries, reads entries and
+        playbooks, follows pointers — then answers with ``[id]`` / ``[slug]``
+        citations::
 
             final = kb.ask("How does the client quote a rush order?", on_step=print)
             print(final["answer"], final["citations"])
 
-        ``on_step`` sees every turn as it lands (its ``thinking`` and
-        ``tool_calls``); the return value is the final turn (``status``
-        answered | step_limit | failed). Every turn is recorded on the service
-        (``list_ask_runs`` / ``get_ask_run``)."""
+        Mount tools run on the host (:meth:`ask_execute`); the three pre-mount
+        tools (search / read / walk) run through this client. ``on_step`` sees
+        every turn as it lands (its ``thinking`` and ``tool_calls``); the return
+        value is the final turn (``status`` answered | step_limit | failed).
+        Every turn is recorded on the service (``list_ask_runs`` / ``get_ask_run``)."""
         step = self.ask_step(question, model=model, reasoning_effort=reasoning_effort, max_steps=max_steps, requested_by=requested_by)
         while True:
             if on_step is not None:
                 on_step(step)
             if step.get("status") != "tool_calls":
                 return step
-            outputs: list[dict[str, Any]] = []
-            for call in step.get("tool_calls", []):
+            run_id = str(step.get("run_id") or "")
+            calls = list(step.get("tool_calls", []))
+            mine, mount = _ask_split_calls(calls)
+            own: list[dict[str, Any]] = []
+            for call in mine:
                 started = time.monotonic()
                 try:
                     out = _ask_execute_tool(str(call.get("name") or ""), call.get("arguments") or {}, search=self.search, get_entry=self.get_entry,
                                             connections=self.connections, graph=self.graph)
-                    outputs.append(_ask_tool_output_item(call, out, duration_ms=(time.monotonic() - started) * 1000))
+                    own.append(_ask_tool_output_item(call, out, duration_ms=(time.monotonic() - started) * 1000))
                 except Exception as exc:  # noqa: BLE001 - the model is told what failed and decides what to do
-                    outputs.append(_ask_tool_output_item(call, error=f"{type(exc).__name__}: {exc}", duration_ms=(time.monotonic() - started) * 1000))
-            step = self.ask_step(run_id=str(step.get("run_id") or ""), previous_response_id=step.get("response_id"), tool_outputs=outputs)
+                    own.append(_ask_tool_output_item(call, error=f"{type(exc).__name__}: {exc}", duration_ms=(time.monotonic() - started) * 1000))
+            executed: Any = None
+            if mount:
+                try:
+                    executed = self.ask_execute(run_id, call_ids=[str(c.get("call_id") or "") for c in mount])
+                except Exception as exc:  # noqa: BLE001 - every mount call is told why it did not run
+                    executed = {"outputs": [_ask_tool_output_item(c, error=f"the mount did not run this call: {type(exc).__name__}: {exc}") for c in mount]}
+            step = self.ask_step(run_id=run_id, previous_response_id=step.get("response_id"), tool_outputs=_ask_merge_outputs(calls, own, executed))
 
     def list_ask_runs(self, *, limit: int = 20, offset: int = 0) -> AskRunList:
         """Recent ask runs of this bank (the audit trail), newest first."""
@@ -1307,6 +1343,9 @@ class KnowledgeBank:
         force: bool = False,
         genre: PlaybookGenre | None = None,
         metadata_merge: dict[str, Any] | None = None,
+        expected_version: int | None = None,
+        base_version: int | None = None,
+        merge: bool = False,
     ) -> PlaybookWriteResult:
         """Create or update the playbook at ``slug`` (versioned).
 
@@ -1336,11 +1375,25 @@ class KnowledgeBank:
         service refuses a step without an actor), ``when_to_use`` is what the
         flow is and what starts it, and the row can never be run. Omitted,
         the service keeps the stored genre (``procedure`` for a new row).
+
+        Two writers on one playbook: pass ``expected_version=<the version you
+        read>`` and the service refuses with
+        :class:`PlaybookVersionConflictError` (``live_version``,
+        ``changed_keys``) instead of overwriting a newer version; ``force``
+        never bypasses it. Or pass ``base_version=<the version you read>,
+        merge=True`` and the service three-way merges your steps onto the live
+        ones under its row lock (step key is identity): a step changed on both
+        sides raises :class:`PlaybookStepConflictError` (``conflicts``), a
+        merge that changes nothing answers ``action="unchanged"`` without a
+        write, and a real merge adds ``(merged onto vN)`` to ``change_note``
+        and reports what happened under ``merge``. Header fields are written
+        as given. Not both.
         """
         body = _pb.upsert_body(
             title=title, when_to_use=when_to_use, steps=steps, summary=summary, status=status,
             supersedes_slug=supersedes_slug, metadata=metadata, change_note=change_note, changed_by=changed_by,
-            genre=genre, metadata_merge=metadata_merge,
+            genre=genre, metadata_merge=metadata_merge, expected_version=expected_version,
+            base_version=base_version, merge=merge,
         )
         return self._http.put(self._path(f"/playbooks/{slug}") + _qs(_pb.force_params(force)), json=body)
 
@@ -1355,6 +1408,14 @@ class KnowledgeBank:
     def list_playbook_versions(self, slug: str) -> list[PlaybookVersion]:
         """Version history for a playbook, newest first (full snapshots)."""
         return self._http.get(self._path(f"/playbooks/{slug}/versions"))
+
+    def playbook_diff(self, slug: str, from_version: int, to_version: int | None = None) -> PlaybookDiff:
+        """What changed between two versions of one playbook: header fields,
+        steps added / removed / changed (matched by key, per-field before and
+        after) and moved. ``to_version`` defaults to the newest version. Show
+        it to an approver, or read it after a
+        :class:`PlaybookVersionConflictError` to see what moved."""
+        return self._http.get(self._path(f"/playbooks/{slug}/diff"), params=_pb.diff_params(from_version, to_version))
 
     # ── playbook runs ────────────────────────────────────────────────────
 

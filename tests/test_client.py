@@ -5,7 +5,12 @@ Uses respx to mock HTTP requests against the API.
 
 from __future__ import annotations
 
+# These tests assert on mocked responses whose keys they set themselves, so
+# indexing a total=False result TypedDict is safe here.
+# pyright: reportTypedDictNotRequiredAccess=false
+
 import json
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -16,6 +21,8 @@ from gurucloud_kb import (
     KnowledgeBank,
     APIError,
     AuthenticationError,
+    DimensionSchema,
+    SearchRequest,
     NotFoundError,
     RateLimitError,
 )
@@ -125,7 +132,7 @@ class TestCreateKB:
         route = respx.post(f"{API_PREFIX}/banks").mock(
             return_value=httpx.Response(201, json={"data": KB_INFO})
         )
-        schema = {
+        schema: DimensionSchema = {
             "version": 1,
             "dimensions": [{"name": "content", "dimension_type": "single"}],
             "categories": [],
@@ -166,6 +173,31 @@ class TestCreateKB:
 
 
 class TestKnowledgeBankSearch:
+    @respx.mock
+    def test_search_query_source_reaches_the_wire(self, client: GuruCloudClient) -> None:
+        respx.get(f"{API_PREFIX}/banks/test-kb-uuid").mock(
+            return_value=httpx.Response(200, json={"data": KB_INFO})
+        )
+        route = respx.post(f"{API_PREFIX}/banks/test-kb-uuid/search").mock(
+            return_value=httpx.Response(200, json={"data": []})
+        )
+        kb = client.get_kb("test-kb-uuid")
+
+        kb.search("auth tokens")
+        assert "query_source" not in json.loads(route.calls[0].request.content)
+
+        kb.search("auth tokens", query_source="sdk_ask")
+        assert json.loads(route.calls[1].request.content)["query_source"] == "sdk_ask"
+
+        kb.search({"dimensions": {"content": {"query_text": "auth tokens"}}}, query_source="sdk_ask")
+        assert json.loads(route.calls[2].request.content)["query_source"] == "sdk_ask"
+
+        kb.search(
+            {"dimensions": {"content": {"query_text": "auth tokens"}}, "query_source": "my_batch"},
+            query_source="sdk_ask",
+        )
+        assert json.loads(route.calls[3].request.content)["query_source"] == "my_batch"
+
     @respx.mock
     def test_simple_string_search(self, client: GuruCloudClient) -> None:
         respx.get(f"{API_PREFIX}/banks/test-kb-uuid").mock(
@@ -230,10 +262,12 @@ class TestKnowledgeBankSearch:
         )
 
         kb = client.get_kb("test-kb-uuid")
-        kb.search({
+        # Legacy key spellings on purpose: search() normalizes them.
+        legacy: dict[str, Any] = {
             "dimensions": {"content": {"query": "JWT", "weight": 2.0}},
             "filters": {"metadata": {"is_example": True}},
-        })
+        }
+        kb.search(cast(SearchRequest, legacy))
 
         sent = json.loads(route.calls[0].request.content)
         assert sent["dimensions"]["content"]["query_text"] == "JWT"

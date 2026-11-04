@@ -43,6 +43,9 @@ def upsert_body(
     changed_by: str | None,
     genre: PlaybookGenre | None = None,
     metadata_merge: dict[str, Any] | None = None,
+    expected_version: int | None = None,
+    base_version: int | None = None,
+    merge: bool = False,
 ) -> dict[str, Any]:
     """Wire body for PUT /playbooks/{slug}.
 
@@ -53,6 +56,9 @@ def upsert_body(
     only when given; the service refuses it together with ``metadata``.
     ``genre`` is sent only when given (the service defaults a new row to
     ``procedure``); a step's ``process`` detail travels inside the step dict.
+    ``expected_version`` (compare-and-set) and ``base_version`` + ``merge``
+    (server-side three-way merge) travel only when given; the service refuses
+    the two together.
     """
     body: dict[str, Any] = {
         "title": title,
@@ -73,7 +79,21 @@ def upsert_body(
         body["supersedes_slug"] = supersedes_slug
     if changed_by:
         body["changed_by"] = changed_by
+    if expected_version is not None:
+        body["expected_version"] = int(expected_version)
+    if base_version is not None:
+        body["base_version"] = int(base_version)
+    if merge:
+        body["merge"] = True
     return body
+
+
+def diff_params(from_version: int, to_version: int | None) -> dict[str, Any]:
+    """Query for GET /playbooks/{slug}/diff (``to`` defaults to the newest version server-side)."""
+    params: dict[str, Any] = {"from": int(from_version)}
+    if to_version is not None:
+        params["to"] = int(to_version)
+    return params
 
 
 def force_params(force: bool) -> dict[str, Any]:

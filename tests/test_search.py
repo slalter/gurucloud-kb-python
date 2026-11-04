@@ -15,6 +15,15 @@ def test_build_string_search_uses_query_text() -> None:
     assert req["threshold"] == 0.4
 
 
+def test_build_string_search_omits_query_source_by_default() -> None:
+    assert "query_source" not in build_string_search("auth tokens", k=7, threshold=0.4)
+
+
+def test_build_string_search_sends_query_source() -> None:
+    req = build_string_search("auth tokens", k=7, threshold=0.4, query_source="sdk_ask")
+    assert req["query_source"] == "sdk_ask"
+
+
 def test_normalize_rewrites_per_dimension_query_alias() -> None:
     out = normalize_search_request(
         {"dimensions": {"content": {"query": "JWT", "weight": 2.0}}}

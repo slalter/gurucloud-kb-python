@@ -21,7 +21,7 @@ export function createEventsView(ctx) {
   mount(el, seg, host);
 
   function segBtn(id, icon, label) {
-    return h('button', { class: `kbx-tab${mode === id ? ' is-active' : ''}`, type: 'button', dataset: { seg: id }, onClick: () => { mode = id; seg.querySelectorAll('.kbx-tab').forEach((b) => b.classList.toggle('is-active', b.dataset.seg === id)); render(); } }, h('i', { class: `bi ${icon}` }), label);
+    return h('button', { class: `kbx-tab${mode === id ? ' is-active' : ''}`, type: 'button', dataset: { seg: id, action: 'history_segment', recordValue: 'segment' }, value: id, onClick: () => { mode = id; seg.querySelectorAll('.kbx-tab').forEach((b) => b.classList.toggle('is-active', b.dataset.seg === id)); render(); } }, h('i', { class: `bi ${icon}` }), label);
   }
 
   function render() { mode === 'queries' ? loadQueries() : mode === 'dedup' ? loadDedup() : loadLog(); }
@@ -68,10 +68,10 @@ export function createEventsView(ctx) {
     }
   }
   function filterPill(label, active, onClick) {
-    return h('button', { class: `kbx-btn ${active ? 'kbx-btn-primary' : 'kbx-btn-ghost'} kbx-btn-sm`, type: 'button', onClick }, label);
+    return h('button', { class: `kbx-btn ${active ? 'kbx-btn-primary' : 'kbx-btn-ghost'} kbx-btn-sm`, type: 'button', dataset: { action: 'history_filter', recordValue: 'filter' }, value: label, onClick }, label);
   }
   function dedupCard(ev) {
-    return h('div', { class: 'kbx-item', onClick: () => openDedupDetail(ev.id) },
+    return h('div', { class: 'kbx-item', dataset: { action: 'history_dedup_open', targetEventId: ev.id, outcome: 'open' }, onClick: () => openDedupDetail(ev.id) },
       h('div', { class: 'kbx-item-head' },
         h('div', { class: 'kbx-row', style: { gap: '6px' } },
           h('span', { class: `kbx-chip ${ACTION_CHIP[ev.action] || 'muted'}` }, ev.action),

@@ -12,7 +12,7 @@
    type a query → matching entries light up, the rest dim. Settings persist per
    bank in localStorage (a per-viewer convenience only). */
 
-import { h, mount, clear, toast, skeleton, num } from './dom.js';
+import { h, mount, clear, toast, skeleton, num, timeAgo } from './dom.js';
 import { buildMapModel, defaultClusterRequest } from './map_layout.js';
 import { openEntryDetail } from './entry_detail.js';
 import { openPlaybookDetail } from './playbook_detail.js';
@@ -36,8 +36,8 @@ export function createMapView(ctx) {
   let lastResponse = null;
 
   // ── controls ───────────────────────────────────────────────────────────────
-  const fieldSel = h('select', { class: 'kbx-select' });
-  const algoSel = h('select', { class: 'kbx-select' },
+  const fieldSel = h('select', { class: 'kbx-select', dataset: { action: 'map_field', recordValue: 'field' } });
+  const algoSel = h('select', { class: 'kbx-select', dataset: { action: 'map_algorithm', recordValue: 'algorithm' } },
     h('option', { value: 'auto' }, 'Auto (HDBSCAN)'),
     h('option', { value: 'hdbscan' }, 'HDBSCAN'),
     h('option', { value: 'kmeans' }, 'K-means (fixed k)'),
@@ -45,15 +45,15 @@ export function createMapView(ctx) {
   const kInput = h('input', { class: 'kbx-input', type: 'number', min: '2', value: '8', disabled: true });
   const minSizeInput = h('input', { class: 'kbx-input', type: 'number', min: '2', value: '5' });
   const targetInput = h('input', { class: 'kbx-input', type: 'number', min: '2', placeholder: '35', title: 'Entries per cluster the automatic cluster count aims for. Smaller = more, tighter clusters with names that fit better.' });
-  const outlierSel = h('select', { class: 'kbx-select' },
+  const outlierSel = h('select', { class: 'kbx-select', dataset: { action: 'map_outliers', recordValue: 'outliers' } },
     h('option', { value: 'subcluster' }, 'Group outliers separately'),
     h('option', { value: 'reassign' }, 'Absorb outliers into nearest'),
     h('option', { value: 'keep' }, 'Leave outliers off the map'));
-  const labelCb = h('input', { type: 'checkbox' });
-  const scopeInput = h('input', { class: 'kbx-input', type: 'text', placeholder: 'Optional: only entries matching…' });
-  const playbooksCb = h('input', { type: 'checkbox', checked: true });
-  const peelCb = h('input', { type: 'checkbox', checked: true });
-  const runBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', onClick: run }, h('i', { class: 'bi bi-diagram-3' }), 'Build map');
+  const labelCb = h('input', { type: 'checkbox', dataset: { action: 'map_labels_toggle', recordValue: 'labels' } });
+  const scopeInput = h('input', { class: 'kbx-input', type: 'text', placeholder: 'Optional: only entries matching…', dataset: { action: 'map_scope_query', recordValue: 'scope' } });
+  const playbooksCb = h('input', { type: 'checkbox', checked: true, dataset: { action: 'map_playbooks_toggle', recordValue: 'playbooks' } });
+  const peelCb = h('input', { type: 'checkbox', checked: true, dataset: { action: 'map_peel_toggle', recordValue: 'peel' } });
+  const runBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', dataset: { action: 'map_build', outcome: 'request' }, onClick: run }, h('i', { class: 'bi bi-diagram-3' }), 'Build map');
 
   algoSel.addEventListener('change', () => { kInput.disabled = !(algoSel.value === 'kmeans' || algoSel.value === 'agglomerative'); });
   scopeInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') run(); });
@@ -80,15 +80,15 @@ export function createMapView(ctx) {
   const canvas = h('div', { class: 'kbx-map-canvas', id: 'kbx-map-canvas' });
   const overlay = h('div', { class: 'kbx-map-overlay' }, h('div', { class: 'kbx-empty' }, h('i', { class: 'bi bi-diagram-3' }), h('h4', {}, 'No map yet'), h('div', {}, 'Choose a field and press Build map.')));
   const tip = h('div', { class: 'kbx-map-tip' });
-  const hlInput = h('input', { class: 'kbx-input', type: 'search', placeholder: 'Highlight entries matching…', style: { width: '220px', background: 'rgba(255,255,255,.95)' } });
+  const hlInput = h('input', { class: 'kbx-input', type: 'search', placeholder: 'Highlight entries matching…', dataset: { action: 'map_highlight_query', recordValue: 'query' }, style: { width: '220px', background: 'rgba(255,255,255,.95)' } });
   hlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') highlight(); if (e.key === 'Escape') clearHighlight(); });
   const hud = h('div', { class: 'kbx-map-hud' },
     hlInput,
-    h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Highlight', onClick: highlight }, h('i', { class: 'bi bi-lightbulb' })),
-    h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Clear highlight', onClick: clearHighlight }, h('i', { class: 'bi bi-x-lg' })),
-    h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Fit', onClick: () => cy && cy.animate({ fit: { padding: 30 } }, { duration: 250 }) }, h('i', { class: 'bi bi-arrows-fullscreen' })),
-    h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Zoom in', onClick: () => cy && cy.zoom({ level: cy.zoom() * 1.3, renderedPosition: { x: canvas.clientWidth / 2, y: canvas.clientHeight / 2 } }) }, h('i', { class: 'bi bi-zoom-in' })),
-    h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Zoom out', onClick: () => cy && cy.zoom({ level: cy.zoom() / 1.3, renderedPosition: { x: canvas.clientWidth / 2, y: canvas.clientHeight / 2 } }) }, h('i', { class: 'bi bi-zoom-out' })));
+    h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Highlight', dataset: { action: 'map_highlight' }, onClick: highlight }, h('i', { class: 'bi bi-lightbulb' })),
+    h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Clear highlight', dataset: { action: 'map_highlight_clear' }, onClick: clearHighlight }, h('i', { class: 'bi bi-x-lg' })),
+    h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Fit', dataset: { action: 'map_fit' }, onClick: () => cy && cy.animate({ fit: { padding: 30 } }, { duration: 250 }) }, h('i', { class: 'bi bi-arrows-fullscreen' })),
+    h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Zoom in', dataset: { action: 'map_zoom_in' }, onClick: () => cy && cy.zoom({ level: cy.zoom() * 1.3, renderedPosition: { x: canvas.clientWidth / 2, y: canvas.clientHeight / 2 } }) }, h('i', { class: 'bi bi-zoom-in' })),
+    h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Zoom out', dataset: { action: 'map_zoom_out' }, onClick: () => cy && cy.zoom({ level: cy.zoom() / 1.3, renderedPosition: { x: canvas.clientWidth / 2, y: canvas.clientHeight / 2 } }) }, h('i', { class: 'bi bi-zoom-out' })));
   const legend = h('div', { class: 'kbx-map-legend' },
     h('span', {}, h('i', { class: 'entry' }), 'entry (bigger = nearer centroid)'),
     h('span', {}, h('i', { class: 'cluster' }), 'cluster'),
@@ -148,11 +148,14 @@ export function createMapView(ctx) {
   }
 
   // ── run ────────────────────────────────────────────────────────────────────
-  async function run() {
+  /** Build the map. `opts.rebuild` recomputes on the server instead of serving its cached result. */
+  async function run(opts) {
     if (!window.cytoscape) { toast('Graph library failed to load (vendor/cytoscape.min.js).', 'error'); return; }
+    if (runBtn.classList.contains('is-loading')) return;
+    const rebuild = !!(opts && opts.rebuild === true);
     saveSettings();
     runBtn.classList.add('is-loading');
-    mount(overlay, skeleton(labelCb.checked ? 'Clustering and naming clusters…' : 'Clustering…'));
+    mount(overlay, skeleton(rebuild ? 'Rebuilding the map…' : (labelCb.checked ? 'Clustering and naming clusters…' : 'Clustering…')));
     overlay.style.display = '';
     try {
       const fieldName = fieldSel.value;
@@ -166,6 +169,7 @@ export function createMapView(ctx) {
       if (!kInput.disabled) req.k = Math.max(2, parseInt(kInput.value, 10) || 8);
       const target = parseInt(targetInput.value, 10);
       if (target >= 2) req.target_cluster_size = target;
+      if (rebuild) req.cache = 'refresh';
       const scope = scopeInput.value.trim();
       if (scope) {
         const semField = semanticFieldFor(fieldName);
@@ -263,7 +267,21 @@ export function createMapView(ctx) {
       s.silhouette != null ? h('div', { title: 'Silhouette: -1 (overlapping) to 1 (well separated)' }, h('b', {}, Number(s.silhouette).toFixed(2)), ' silhouette') : null,
       s.scope ? h('div', {}, h('b', {}, num(s.scope.entry_count)), s.scope.source === 'search' ? ' in scope' : ' in bank', s.scope.truncated ? ' (capped)' : '') : null,
       model.playbooks.length ? h('div', {}, h('b', {}, num(model.playbooks.length)), ' playbooks, ', h('b', {}, num(model.links.length)), ' step→entry links') : null,
+      cacheLine(lastResponse && lastResponse.cache),
       s.note ? h('div', { class: 'kbx-alert info', style: { padding: '6px 9px', width: '100%' } }, s.note) : null);
+  }
+
+  /** Where the result came from: the server's cluster cache or a fresh run, with a Rebuild control. */
+  function cacheLine(cache) {
+    if (!cache || !cache.status) return null;
+    const took = cache.compute_ms != null ? `${(cache.compute_ms / 1000).toFixed(cache.compute_ms < 10000 ? 1 : 0)} s` : null;
+    let text;
+    if (cache.status === 'hit') text = `Cached map, built ${cache.computed_at ? timeAgo(cache.computed_at) : "earlier"}${took ? ` (took ${took} to build)` : ''}; the bank has not changed since.`;
+    else if (cache.status === 'miss' || cache.status === 'refresh') text = `Built just now${took ? ` in ${took}` : ''}; reopening it is instant until the bank changes.`;
+    else return null;
+    const rebuildBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Recompute the clusters instead of using the cached result', dataset: { action: 'map_rebuild', outcome: 'request' }, onClick: () => run({ rebuild: true }) }, h('i', { class: 'bi bi-arrow-clockwise' }), 'Rebuild');
+    return h('div', { class: 'kbx-map-cache', dataset: { cacheStatus: cache.status }, style: { width: '100%', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px', fontSize: '12px' } },
+      h('span', { class: 'kbx-muted', style: { flex: '1 1 160px', minWidth: 0 } }, text), rebuildBtn);
   }
 
   function renderClusterList() {
@@ -282,7 +300,7 @@ export function createMapView(ctx) {
     if (cy) { const n = cy.getElementById(key); if (n.length) cy.animate({ fit: { eles: n, padding: 40 } }, { duration: 300 }); }
     const members = model.entries.filter((e) => e.clusterKey === key);
     mount(sideHost,
-      h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', onClick: renderClusterList, style: { marginBottom: '8px' } }, h('i', { class: 'bi bi-arrow-left' }), 'All clusters'),
+      h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { action: 'map_all_clusters' }, onClick: renderClusterList, style: { marginBottom: '8px' } }, h('i', { class: 'bi bi-arrow-left' }), 'All clusters'),
       h('div', { class: 'kbx-side-title' }, c.title),
       c.description ? h('p', { style: { margin: '0 0 10px', fontSize: '13px', lineHeight: '1.5', color: 'var(--kbx-body)' } }, c.description) : null,
       h('div', { class: 'kbx-row', style: { gap: '6px', marginBottom: '8px' } },

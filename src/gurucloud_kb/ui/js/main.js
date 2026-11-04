@@ -11,7 +11,12 @@
                                                      (platform mode) and send it on
                                                      every API call
      ></div>
-   Panels: Entries · Map · Graph · Ask · Similar · Playbooks · Process search · Schema · Quality · History · Connect. */
+   Panels: Entries · Map · Graph · Ask · Similar · Playbooks · Process search · Schema · Quality · History · Connect.
+
+   User-action recording (kanban 812c0da2): every control carries a stable
+   data-action name (tab_<panel>, <panel>_<verb>[_<object>]) plus data-target-*
+   ids and data-record-value keys, so a host that loads guru-recorder.js records
+   one row per action; hosts without it ignore the attributes. */
 
 import { h, mount, toast } from './dom.js';
 import { createApi } from './api.js';
@@ -74,12 +79,12 @@ export function bootExplorer(root) {
     h('div', { class: 'kbx-title' },
       h('span', { class: 'kbx-mascot', 'aria-hidden': 'true' }, h('i', {}), h('i', {})),
       h('div', { style: { minWidth: 0 } },
-        dashUrl ? h('a', { class: 'kbx-back', href: dashUrl }, h('i', { class: 'bi bi-arrow-left' }), 'Knowledge Banks') : null,
+        dashUrl ? h('a', { class: 'kbx-back', href: dashUrl, dataset: { action: 'nav_knowledge_banks' } }, h('i', { class: 'bi bi-arrow-left' }), 'Knowledge Banks') : null,
         titleEl, subEl)),
     h('div', { class: 'kbx-header-actions' },
       h('span', { class: 'kbx-chip muted kbx-mono', title: 'KB id' }, String(kbId).slice(0, 8)),
       modeChip(mode) ? h('span', { class: 'kbx-chip muted' }, modeChip(mode)) : null,
-      h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', onClick: () => location.reload() }, h('i', { class: 'bi bi-arrow-clockwise' }), 'Refresh')));
+      h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { action: 'explorer_refresh' }, onClick: () => location.reload() }, h('i', { class: 'bi bi-arrow-clockwise' }), 'Refresh')));
 
   // ── tabs + panels ──────────────────────────────────────────────────────────
   const tabsEl = h('div', { class: 'kbx-tabs', role: 'tablist' });
@@ -88,7 +93,7 @@ export function bootExplorer(root) {
   const panelEls = {};
 
   panels.forEach((p) => {
-    const tab = h('button', { class: 'kbx-tab', type: 'button', role: 'tab', dataset: { panel: p.id }, onClick: () => activate(p.id) }, h('i', { class: `bi ${p.icon}` }), p.label);
+    const tab = h('button', { class: 'kbx-tab', type: 'button', role: 'tab', dataset: { panel: p.id, action: `tab_${p.id.replace(/-/g, '_')}` }, onClick: () => activate(p.id) }, h('i', { class: `bi ${p.icon}` }), p.label);
     tabsEl.append(tab);
     const panel = h('div', { class: 'kbx-panel', dataset: { panel: p.id } });
     panelHost.append(panel);

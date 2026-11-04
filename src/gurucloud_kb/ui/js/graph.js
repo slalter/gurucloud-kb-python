@@ -51,18 +51,18 @@ export function createGraphView(ctx) {
   let userMoved = false;         // the user rotated/zoomed since the last picture change
 
   // ── controls ───────────────────────────────────────────────────────────────
-  const queryInput = h('input', { class: 'kbx-input', type: 'search', placeholder: 'Ask the bank the way an agent would…', dataset: { role: 'graph-query' } });
-  const kInput = h('input', { class: 'kbx-input', type: 'number', min: '1', max: '20', value: String(DEFAULTS.k), title: 'Results returned (top-K)', dataset: { role: 'graph-k' } });
-  const collapseCb = h('input', { type: 'checkbox', checked: DEFAULTS.collapse, dataset: { role: 'graph-collapse' } });
-  const neighborsSel = h('select', { class: 'kbx-select', dataset: { role: 'graph-neighbors' } }, ...[0, 1, 2, 3, 4, 5, 6].map((n) => h('option', { value: String(n), selected: n === DEFAULTS.maxNeighbors ? true : undefined }, `${n} per result`)));
-  const contextCb = h('input', { type: 'checkbox', dataset: { role: 'graph-context' } });
-  const focusSel = h('select', { class: 'kbx-select', dataset: { role: 'graph-focus' }, title: 'What happens to everything that is not part of the answer' },
+  const queryInput = h('input', { class: 'kbx-input', type: 'search', placeholder: 'Ask the bank the way an agent would…', dataset: { role: 'graph-query', action: 'graph_query', recordValue: 'query' } });
+  const kInput = h('input', { class: 'kbx-input', type: 'number', min: '1', max: '20', value: String(DEFAULTS.k), title: 'Results returned (top-K)', dataset: { role: 'graph-k', action: 'graph_k', recordValue: 'k' } });
+  const collapseCb = h('input', { type: 'checkbox', checked: DEFAULTS.collapse, dataset: { role: 'graph-collapse', action: 'graph_collapse_toggle', recordValue: 'collapse' } });
+  const neighborsSel = h('select', { class: 'kbx-select', dataset: { role: 'graph-neighbors', action: 'graph_neighbors', recordValue: 'neighbors' } }, ...[0, 1, 2, 3, 4, 5, 6].map((n) => h('option', { value: String(n), selected: n === DEFAULTS.maxNeighbors ? true : undefined }, `${n} per result`)));
+  const contextCb = h('input', { type: 'checkbox', dataset: { role: 'graph-context', action: 'graph_context_toggle', recordValue: 'context' } });
+  const focusSel = h('select', { class: 'kbx-select', dataset: { role: 'graph-focus', action: 'graph_focus', recordValue: 'focus' }, title: 'What happens to everything that is not part of the answer' },
     h('option', { value: 'shrink' }, 'shrink the rest'), h('option', { value: 'only' }, 'answer only'), h('option', { value: 'dim' }, 'dim the rest'));
-  const layoutSel = h('select', { class: 'kbx-select', dataset: { role: 'graph-layout' }, title: 'Where entries sit: pulled by their connections, or placed by a projection of their embeddings so distance means meaning' },
+  const layoutSel = h('select', { class: 'kbx-select', dataset: { role: 'graph-layout', action: 'graph_layout', recordValue: 'layout' }, title: 'Where entries sit: pulled by their connections, or placed by a projection of their embeddings so distance means meaning' },
     h('option', { value: 'force' }, 'by connections (force)'), h('option', { value: 'content' }, 'by meaning: content'), h('option', { value: 'useful_for' }, 'by meaning: useful_for'), h('option', { value: 'both' }, 'by meaning: both'));
-  const backfillCb = h('input', { type: 'checkbox', checked: true, dataset: { role: 'graph-hide-backfill' } });
-  const searchBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', dataset: { role: 'graph-search' }, onClick: runSearch }, h('i', { class: 'bi bi-search' }), 'Search');
-  const clearBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { role: 'graph-clear' }, onClick: () => { queryInput.value = ''; lastAnswer = null; render('picture'); } }, 'Whole bank');
+  const backfillCb = h('input', { type: 'checkbox', checked: true, dataset: { role: 'graph-hide-backfill', action: 'graph_hide_backfill_toggle', recordValue: 'hide_backfill' } });
+  const searchBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', dataset: { role: 'graph-search', action: 'graph_search', outcome: 'request' }, onClick: runSearch }, h('i', { class: 'bi bi-search' }), 'Search');
+  const clearBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { role: 'graph-clear', action: 'graph_whole_bank' }, onClick: () => { queryInput.value = ''; lastAnswer = null; render('picture'); } }, 'Whole bank');
   queryInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') runSearch(); });
   collapseCb.addEventListener('change', () => { neighborsSel.disabled = !collapseCb.checked; });
   [kInput, collapseCb, neighborsSel].forEach((i) => i.addEventListener('change', saveSettings));
@@ -89,10 +89,10 @@ export function createGraphView(ctx) {
   const overlay = h('div', { class: 'kbx-map-overlay', style: { display: 'none' } });
   const caption = h('span', { class: 'kbx-chip muted', dataset: { role: 'graph-caption' } }, '…');
   const layoutChip = h('span', { class: 'kbx-chip muted', dataset: { role: 'graph-layout-chip' }, style: { display: 'none' } }, '');
-  const recomputeBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Recompute the semantic layout now', dataset: { role: 'graph-recompute' }, style: { display: 'none' }, onClick: recompute }, h('i', { class: 'bi bi-arrow-repeat' }));
+  const recomputeBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Recompute the semantic layout now', dataset: { role: 'graph-recompute', action: 'graph_recompute_layout' }, style: { display: 'none' }, onClick: recompute }, h('i', { class: 'bi bi-arrow-repeat' }));
   const hud = h('div', { class: 'kbx-map-hud' },
     caption, layoutChip, recomputeBtn,
-    h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Fit', dataset: { role: 'graph-fit' }, onClick: () => fitView() }, h('i', { class: 'bi bi-arrows-fullscreen' })));
+    h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', title: 'Fit', dataset: { role: 'graph-fit', action: 'graph_fit' }, onClick: () => fitView() }, h('i', { class: 'bi bi-arrows-fullscreen' })));
   const legend = h('div', { class: 'kbx-map-legend kbx-graph-legend' },
     h('span', {}, h('i', { class: 'g-hit' }), 'retrieved (#rank)'),
     h('span', {}, h('i', { class: 'g-folded' }), 'pointer: folded into a result'),
@@ -320,7 +320,7 @@ export function createGraphView(ctx) {
         ptrs.length ? h('div', { class: 'kbx-graph-ptrs' }, ...ptrs) : null));
     });
     const rawPre = h('pre', { class: 'kbx-graph-raw', style: { display: 'none' }, dataset: { role: 'graph-raw' } }, JSON.stringify({ request: payload, response: raw }, null, 2));
-    const rawBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { role: 'graph-raw-toggle' }, onClick: () => { const on = rawPre.style.display === 'none'; rawPre.style.display = on ? 'block' : 'none'; rawBtn.textContent = on ? 'Hide raw JSON' : 'Raw JSON'; } }, 'Raw JSON');
+    const rawBtn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { role: 'graph-raw-toggle', action: 'graph_raw_json_toggle' }, onClick: () => { const on = rawPre.style.display === 'none'; rawPre.style.display = on ? 'block' : 'none'; rawBtn.textContent = on ? 'Hide raw JSON' : 'Raw JSON'; } }, 'Raw JSON');
     mount(answerHost, head, list, h('div', { class: 'kbx-row', style: { gap: '6px', marginTop: '6px' } }, rawBtn), rawPre);
   }
 
@@ -348,8 +348,8 @@ export function createGraphView(ctx) {
       h('div', { class: 'kbx-graph-selected-text' }, labelFor(entry)),
       entry.useful_for && labelFor(entry) !== entry.useful_for ? h('div', { class: 'kbx-muted', style: { fontSize: '12px', marginTop: '4px' } }, entry.useful_for) : null,
       h('div', { class: 'kbx-row', style: { gap: '6px', marginTop: '8px' } },
-        h('button', { class: 'kbx-btn kbx-btn-sm kbx-btn-primary', type: 'button', dataset: { role: 'graph-open-entry' }, onClick: () => openEntryDetail(ctx, n.id) }, 'Open entry'),
-        h('button', { class: 'kbx-btn kbx-btn-sm kbx-btn-ghost', type: 'button', dataset: { role: 'graph-expand' }, onClick: () => expandNode(n.id) }, 'Show its connections')),
+        h('button', { class: 'kbx-btn kbx-btn-sm kbx-btn-primary', type: 'button', dataset: { role: 'graph-open-entry', action: 'entry_open', targetEntryId: n.id, outcome: 'open' }, onClick: () => openEntryDetail(ctx, n.id) }, 'Open entry'),
+        h('button', { class: 'kbx-btn kbx-btn-sm kbx-btn-ghost', type: 'button', dataset: { role: 'graph-expand', action: 'graph_expand_node', targetEntryId: n.id, outcome: 'request' }, onClick: () => expandNode(n.id) }, 'Show its connections')),
       links.length ? h('div', { class: 'kbx-graph-ptrs', style: { marginTop: '8px' } }, ...links.map((l) => {
         const src = l.source.id || l.source; const tgt = l.target.id || l.target; const other = src === n.id ? tgt : src;
         return h('div', { class: `kbx-ptr ${l.pointer ? 'folded' : 'muted'}` }, `${String(l.relation || '').replace(/_/g, ' ')} ${src === n.id ? '→' : '←'} ${labelFor(bankEnds[other]) || String(other).slice(0, 8)}${l.note ? ` — ${l.note}` : ''}`);
