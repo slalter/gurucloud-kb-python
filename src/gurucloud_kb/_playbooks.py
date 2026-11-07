@@ -58,7 +58,9 @@ def upsert_body(
     ``procedure``); a step's ``process`` detail travels inside the step dict.
     ``expected_version`` (compare-and-set) and ``base_version`` + ``merge``
     (server-side three-way merge) travel only when given; the service refuses
-    the two together.
+    the two together. In both modes ``steps`` is the COMPLETE list: a merge
+    keeps upstream edits to steps you did not touch, it never fills in steps
+    you left out, and an omitted step is a deletion.
     """
     body: dict[str, Any] = {
         "title": title,

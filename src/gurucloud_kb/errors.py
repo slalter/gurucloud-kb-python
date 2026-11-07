@@ -134,8 +134,9 @@ class PlaybookVersionConflictError(APIError):
     Resolve by reading the playbook again (``playbook_diff(slug,
     expected_version, live_version)`` shows what moved), re-applying your
     edit and writing with ``expected_version=live_version``, or by passing
-    ``base_version=<what you read>, merge=True`` so the service merges
-    disjoint step edits for you.
+    ``base_version=<what you read>, merge=True`` with your COMPLETE step list
+    so the service keeps the upstream edits to steps you did not touch (an
+    omitted step is still a deletion).
     """
 
     def __init__(self, message: str, details: dict | None = None) -> None:

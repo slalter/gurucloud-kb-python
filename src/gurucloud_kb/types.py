@@ -826,8 +826,11 @@ class PlaybookStepInput(TypedDict, total=False):
     title: str
     body: str
     kb_entry_id: str
-    """Optional entry id whose fact this step relies on; ``get_playbook``
-    inlines it under ``linked_entries`` instead of duplicating the fact."""
+    """Legacy single link; mirrors the first of ``kb_entry_ids``."""
+    kb_entry_ids: list[str]
+    """Entry ids whose facts this step relies on, in reading order (at most
+    10); ``get_playbook`` lists them under ``linked_entries`` instead of
+    duplicating the facts."""
     key: str
     """Stable id of the step inside the playbook (e.g. ``GAS-002``)."""
     kind: StepKind
@@ -886,9 +889,12 @@ class PlaybookList(TypedDict, total=False):
 
 
 class LinkedEntry(TypedDict, total=False):
-    """A KB entry a step cites via ``kb_entry_id``, inlined on read."""
+    """A KB entry a step cites via ``kb_entry_ids``: ``brief`` always, the body
+    (``content`` / ``useful_for``) when the read asked for
+    ``linked_entries_detail="full"`` (the REST default)."""
 
     id: str
+    brief: str | None
     content: str | None
     useful_for: str | None
     missing: bool
@@ -982,9 +988,13 @@ class PlaybookMergeReport(TypedDict, total=False):
     base_version: int
     live_version: int
     action: Literal["proposed", "merged", "unchanged"]
-    """proposed: nothing changed upstream; merged: disjoint edits combined; unchanged: nothing written."""
+    """proposed: nothing changed upstream, your list was written as given; merged: disjoint edits combined; unchanged: nothing written."""
     touched_local: list[str]
+    """Step keys you changed, added or removed against ``base_version``."""
     touched_upstream: list[str]
+    removed_local: list[str]
+    """Step keys at ``base_version`` that your ``steps`` omitted. ``steps`` is the complete
+    list (a merge is not a patch), so these were deleted on a ``proposed`` or ``merged`` write."""
 
 
 class PlaybookWriteResult(TypedDict, total=False):
@@ -1078,6 +1088,7 @@ class RunStepView(TypedDict, total=False):
     title: str
     body: str
     kb_entry_id: str | None
+    kb_entry_ids: list[str]
     transitions: list[RunTransition]
     verdicts: list[str]
 

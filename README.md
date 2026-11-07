@@ -1049,6 +1049,18 @@ edit the harness, they file a card.
 
 ## Changelog
 
+### 0.19.1
+
+- **`PlaybookMergeReport.removed_local`** (gurucloudai kanban d6a3598f, DEC
+  request 1931d941): the step keys at `base_version` that your `steps` omitted.
+  `upsert_playbook(base_version=..., merge=True)` takes your COMPLETE step
+  list, never a patch: a step you leave out is deleted whether or not the
+  playbook moved on upstream, and `touched_local` had lumped those deletions in
+  with your edits. The new field (and the MCP tool's `merge_hint`) names them.
+  Docstrings on `upsert_playbook` and `PlaybookVersionConflictError` say the
+  same. Needs a platform image >= 1.14.0 for the field; older images leave it
+  absent.
+
 ### 0.19.0
 
 - **Concurrency control on `upsert_playbook`** (gurucloudai kanban 25f2c388,

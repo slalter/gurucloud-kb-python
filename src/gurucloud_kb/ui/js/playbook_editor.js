@@ -5,7 +5,7 @@
 
 import { h, mount, clear, toast } from './dom.js';
 import { openModal } from './modal.js';
-import { STEP_KINDS, stepKind, transitionsOf, findStepIndex, cleanStep } from './playbook_graph.js';
+import { STEP_KINDS, stepKind, transitionsOf, findStepIndex, cleanStep, stepEntryIds } from './playbook_graph.js';
 import { GENRE_PROCEDURE, GENRE_PROCESS, PROCESS_STEP_FIELDS, genreOf, processDetailOf, nestProcessFields, processStepsProblem, documentationBanner } from './process_view.js';
 
 const KIND_LABEL = { action: 'Action', decision: 'Decision', end: 'End' };
@@ -56,7 +56,7 @@ export function openPlaybookEditor(ctx, existing, { prefill = null, onSaved, gen
   function addStep(step) {
     const titleI = h('input', { class: 'kbx-input', placeholder: 'Step title', value: step ? step.title || '' : '' });
     const bodyI = h('textarea', { class: 'kbx-textarea', rows: '3', placeholder: 'What to do in this step' }, step ? step.body || '' : '');
-    const entryI = h('input', { class: 'kbx-input kbx-mono', placeholder: 'Linked KB entry id (optional)', value: step && step.kb_entry_id ? step.kb_entry_id : '' });
+    const entryI = h('input', { class: 'kbx-input kbx-mono', placeholder: 'Linked KB entry ids, comma-separated (optional)', value: step ? stepEntryIds(step).join(', ') : '', dataset: { role: 'step-entry-ids' } });
     const keyI = h('input', { class: 'kbx-input kbx-mono', placeholder: 'Key (optional, e.g. GAS-002)', value: step && step.key ? step.key : '', dataset: { role: 'step-key' } });
     const kindSel = h('select', { class: 'kbx-select', dataset: { role: 'step-kind', action: 'playbook_editor_step_kind', recordValue: 'kind' } }, ...STEP_KINDS.map((k) => h('option', { value: k }, KIND_LABEL[k])));
     kindSel.value = stepKind(step);
@@ -163,7 +163,8 @@ export function openPlaybookEditor(ctx, existing, { prefill = null, onSaved, gen
       Object.entries(r.processInputs).forEach(([field, input]) => { flat[field] = input.value; });
       const process = isProcessGenre() ? nestProcessFields(flat) : {};
       return cleanStep({
-        title: r.titleI.value.trim(), body: r.bodyI.value.trim(), kb_entry_id: r.entryI.value.trim() || null,
+        title: r.titleI.value.trim(), body: r.bodyI.value.trim(), kb_entry_id: null,
+        kb_entry_ids: r.entryI.value.split(/[\s,]+/).map((v) => v.trim()).filter(Boolean),
         key: r.keyI.value, kind: r.kindSel.value,
         next: live(r).map((tr) => ({ to: tr.target.keyI.value.trim(), when: tr.whenI.value, limit: tr.limitI.value })),
         process,

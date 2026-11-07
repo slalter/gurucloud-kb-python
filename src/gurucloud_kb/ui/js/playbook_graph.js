@@ -116,8 +116,22 @@ export function cleanTransition(t) {
 /** A step for an upsert payload. key / kind / next appear only when set, so a
     linear step stays exactly {title, body, kb_entry_id}. kind "action" is the
     server default and is omitted. */
+/* Every KB entry a step cites, in order: kb_entry_ids when set, else the
+   legacy single kb_entry_id (kanban 529a44dd). */
+export function stepEntryIds(step) {
+  const many = Array.isArray(step && step.kb_entry_ids) ? step.kb_entry_ids : [];
+  const ids = [];
+  [...(step && step.kb_entry_id && !many.length ? [step.kb_entry_id] : []), ...many].forEach((raw) => {
+    const id = raw == null ? '' : String(raw).trim();
+    if (id && !ids.includes(id)) ids.push(id);
+  });
+  return ids;
+}
+
 export function cleanStep(step) {
-  const out = { title: step.title, body: step.body, kb_entry_id: step.kb_entry_id || null };
+  const ids = stepEntryIds(step);
+  const out = { title: step.title, body: step.body, kb_entry_id: ids[0] || null };
+  if (ids.length > 1) out.kb_entry_ids = ids;
   const key = step.key == null ? '' : String(step.key).trim();
   if (key) out.key = key;
   if (stepKind(step) !== 'action') out.kind = stepKind(step);

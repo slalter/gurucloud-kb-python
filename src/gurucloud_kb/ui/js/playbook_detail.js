@@ -7,7 +7,7 @@ import { openPlaybookEditor } from './playbook_editor.js';
 import { openEntryDetail } from './entry_detail.js';
 import { truncate } from './schema_utils.js';
 import { markdownToText } from './markdown_model.js';
-import { sortSteps, stepKind, describeTransitions, isBranching, cleanStep } from './playbook_graph.js';
+import { sortSteps, stepKind, describeTransitions, isBranching, cleanStep, stepEntryIds } from './playbook_graph.js';
 import { runsSection } from './playbook_runs.js';
 import { isProcess, handoffRows, optionalColumns, documentationBanner, processMetaPairs } from './process_view.js';
 
@@ -32,7 +32,7 @@ export async function openPlaybookDetail(ctx, slug, { onChanged, highlight } = {
   const allSteps = pb.steps || [];
   const ordered = isBranching(allSteps) ? sortSteps(allSteps) : allSteps;
   ordered.forEach((st) => {
-    const linked = st.kb_entry_id ? linkedById[st.kb_entry_id] : null;
+    const entryIds = stepEntryIds(st);
     steps.append(h('li', { class: `kbx-step${hits.has(Number(st.position)) ? ' is-hit' : ''}` },
       h('span', { class: 'kbx-step-num' }),
       h('div', { class: 'kbx-step-body' },
@@ -40,12 +40,16 @@ export async function openPlaybookDetail(ctx, slug, { onChanged, highlight } = {
         process && st.process && st.process.actor ? h('div', { class: 'kbx-muted', dataset: { role: 'step-actor' }, style: { fontSize: '12px', marginBottom: '2px' } }, h('i', { class: 'bi bi-person' }), ` ${st.process.actor}`, st.process.system ? ` · ${st.process.system}` : '') : null,
         h('div', { class: 'kbx-step-text' }, st.body),
         transitionList(st, ordered),
-        st.kb_entry_id ? h('div', { class: 'kbx-step-link' },
-          linked && !linked.missing
-            ? h('div', { class: 'kbx-alert info', role: 'button', tabindex: '0', style: { padding: '8px 11px', cursor: 'pointer' }, dataset: { action: 'playbook_linked_entry_open', targetEntryId: st.kb_entry_id, targetSlug: slug, outcome: 'open' }, onClick: () => { ref.close(); openEntryDetail(ctx, st.kb_entry_id); } },
-                h('i', { class: 'bi bi-link-45deg' }),
-                h('div', {}, h('div', { style: { fontWeight: '600' } }, 'Linked entry'), h('div', { class: 'kbx-muted', style: { fontSize: '12px' } }, truncate(markdownToText(linked.content), 180))))
-            : h('span', { class: 'kbx-chip danger' }, `Linked entry missing: ${String(st.kb_entry_id).slice(0, 8)}`)) : null)));
+        ...entryIds.map((entryId) => {
+          const linked = linkedById[entryId];
+          const preview = linked ? (linked.brief || truncate(markdownToText(linked.content || ''), 180)) : '';
+          return h('div', { class: 'kbx-step-link', dataset: { role: 'step-linked-entry' }, style: { marginTop: '6px' } },
+            linked && !linked.missing
+              ? h('div', { class: 'kbx-alert info', role: 'button', tabindex: '0', style: { padding: '8px 11px', cursor: 'pointer' }, dataset: { action: 'playbook_linked_entry_open', targetEntryId: entryId, targetSlug: slug, outcome: 'open' }, onClick: () => { ref.close(); openEntryDetail(ctx, entryId); } },
+                  h('i', { class: 'bi bi-link-45deg' }),
+                  h('div', {}, h('div', { style: { fontWeight: '600' } }, entryIds.length > 1 ? `Linked entry ${entryIds.indexOf(entryId) + 1} of ${entryIds.length}` : 'Linked entry'), h('div', { class: 'kbx-muted', style: { fontSize: '12px' } }, preview)))
+              : h('span', { class: 'kbx-chip danger' }, `Linked entry missing: ${String(entryId).slice(0, 8)}`));
+        }))));
   });
 
   const n = (pb.steps || []).length;
