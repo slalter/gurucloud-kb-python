@@ -9,7 +9,7 @@ import { truncate } from './schema_utils.js';
 import { markdownToText } from './markdown_model.js';
 import { sortSteps, stepKind, describeTransitions, isBranching, cleanStep, stepEntryIds } from './playbook_graph.js';
 import { runsSection } from './playbook_runs.js';
-import { isProcess, handoffRows, optionalColumns, documentationBanner, processMetaPairs } from './process_view.js';
+import { isProcess, handoffRows, optionalColumns, processMetaPairs, PROCESS_PROVENANCE } from './process_view.js';
 
 export const STATUS_CHIP = { active: 'success', draft: 'warn', superseded: 'muted' };
 const MIN_DELETE_REASON = 20;
@@ -56,18 +56,25 @@ export async function openPlaybookDetail(ctx, slug, { onChanged, highlight } = {
   ref.setBody(h('div', {},
     h('div', { class: 'kbx-row-between', style: { marginBottom: '12px' } },
       h('div', {}, h('h3', { style: { margin: '0 0 4px' } }, pb.title), h('span', { class: `kbx-chip ${process ? 'info' : ''}`, dataset: { role: 'genre' } }, process ? 'process' : 'playbook'), h('span', { class: `kbx-chip ${STATUS_CHIP[pb.status] || 'muted'}`, style: { marginLeft: '6px' } }, pb.status), h('span', { class: 'kbx-chip muted', style: { marginLeft: '6px' } }, `v${pb.version}`), h('span', { class: 'kbx-mono kbx-muted', style: { marginLeft: '8px', fontSize: '12px' } }, pb.slug))),
-    process ? h('div', { class: 'kbx-alert warn', dataset: { role: 'documentation-banner' }, style: { marginBottom: '14px' } }, h('i', { class: 'bi bi-info-circle' }), h('div', {}, documentationBanner())) : null,
+    // The agent-facing "not a procedure for you" banner stays on the MCP read (documentation_banner);
+    // a person reading the explorer gets one line of provenance (kanban 39aa973f).
+    process ? h('p', { class: 'kbx-muted', dataset: { role: 'process-provenance' }, style: { fontSize: '12px', margin: '0 0 12px' } }, h('i', { class: 'bi bi-info-circle' }), ` ${PROCESS_PROVENANCE}`) : null,
     h('div', { class: 'kbx-alert info', style: { marginBottom: '14px' } }, h('i', { class: process ? 'bi bi-diagram-3' : 'bi bi-signpost-2' }), h('div', {}, h('strong', {}, process ? 'About — ' : 'When to use — '), pb.when_to_use)),
     pb.summary ? h('p', { style: { color: 'var(--kbx-body)', marginTop: 0 } }, pb.summary) : null,
     process ? processMeta(pb.metadata) : null,
     process ? handoffTable(ordered, { highlight: hits }) : null,
-    h('h4', { style: { fontSize: '14px', color: 'var(--kbx-heading)', margin: '10px 0 4px' } }, process ? `${n} hand-off${n === 1 ? '' : 's'} in detail` : `${n} step${n === 1 ? '' : 's'}`),
-    steps,
+    // A process already lists every hand-off in the table: the step cards are the long form, collapsed.
+    process
+      ? h('details', { class: 'kbx-handoff-details', dataset: { role: 'handoff-details' } },
+          h('summary', { dataset: { action: 'process_handoffs_toggle', targetSlug: slug } }, `Show the ${n} hand-off${n === 1 ? '' : 's'} in detail`),
+          steps)
+      : h('h4', { style: { fontSize: '14px', color: 'var(--kbx-heading)', margin: '10px 0 4px' } }, `${n} step${n === 1 ? '' : 's'}`),
+    process ? null : steps,
     process ? null : runsSection(ctx, pb),
     h('dl', { class: 'kbx-kv kbx-mt-lg' },
       h('dt', {}, 'Created'), h('dd', {}, fmtDate(pb.created_at)),
       h('dt', {}, 'Updated'), h('dd', {}, fmtDate(pb.updated_at)),
-      h('dt', {}, 'Created by'), h('dd', {}, pb.created_by || '—'))));
+      ...(pb.created_by ? [h('dt', {}, 'Created by'), h('dd', {}, pb.created_by)] : []))));
 
   if (hits.size) {
     requestAnimationFrame(() => {
@@ -81,7 +88,8 @@ export async function openPlaybookDetail(ctx, slug, { onChanged, highlight } = {
   const versionsBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { action: 'playbook_versions_open', targetSlug: slug, outcome: 'open' }, onClick: () => { ref.close(); openPlaybookVersions(ctx, slug, { onChanged }); } }, h('i', { class: 'bi bi-clock-history' }), 'Versions');
   const editBtn = h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { action: 'playbook_edit_open', targetSlug: slug, outcome: 'open' }, onClick: () => { ref.close(); openPlaybookEditor(ctx, pb, { onSaved: changed }); } }, h('i', { class: 'bi bi-pencil' }), 'Edit');
   const delBtn = h('button', { class: 'kbx-btn kbx-btn-danger', type: 'button', dataset: { action: 'playbook_delete_open', targetSlug: slug, outcome: 'open' }, onClick: () => { ref.close(); confirmDeletePlaybook(ctx, pb.slug, pb.title, { onChanged, process }); } }, h('i', { class: 'bi bi-trash' }), 'Delete');
-  ref.setFoot([versionsBtn, editBtn, delBtn]);
+  // kanban 39aa973f: a reader sees no write controls (the server still authorizes every write).
+  ref.setFoot(!ctx.canEdit || ctx.canEdit() ? [versionsBtn, editBtn, delBtn] : []);
 }
 
 const KIND_CHIP = { decision: ['info', 'Decision'], end: ['muted', 'End'] };

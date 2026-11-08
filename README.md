@@ -1049,6 +1049,39 @@ edit the harness, they file a card.
 
 ## Changelog
 
+### 0.19.4
+
+- **Metadata-only playbook writes** (gurucloudai kanban d3559de4): `steps` is
+  optional on `upsert_playbook` (sync and async). Left as `None` on an existing
+  slug the service keeps the stored steps (and their genre) in the new version
+  and the result carries `steps_kept: true`; a given list still replaces the
+  whole step list, and a create without steps raises an `APIError` with code
+  `steps_required`. `PlaybookWriteResult.steps_kept` typed.
+
+### 0.19.3
+
+- **Explorer chrome for human readers** (gurucloudai kanban 39aa973f): the
+  header shows the bank description's first sentence, with the full
+  description (the bank's MCP charter for agents) behind a "For agents"
+  disclosure. When the host's `/info` sends `viewer: {access, can_edit}` and
+  `can_edit` is false, the stat tiles, the bank id chip, the Playbooks tab's
+  New button and a playbook's Versions / Edit / Delete are hidden; hosts that
+  do not send `viewer` behave as before. A process's detail no longer shows
+  the agent-facing "not a procedure" banner (the MCP read keeps it), collapses
+  the step cards under the hand-off table, and omits an unknown "Created by".
+
+### 0.19.2
+
+- **Similar pairs propose typed edges** (gurucloudai kanban 5567fc2d):
+  `PairProposal.edges` lists the connections the judge proposes between the
+  pair (`ProposedEdge`: `from_entry_id`, `to_entry_id`, `edge_type`, `note`),
+  drawn from the bank's own edge vocabulary (built-ins plus its declared
+  `edge_relations`; replace-mode banks only their own). The judge sees the
+  edges the pair already has and does not re-propose them.
+  `apply_pair_proposal` writes them (source `judge`, symmetric relations both
+  ways) and reports `connections_created` / `connection_errors`. Older
+  platform images ignore `edges`.
+
 ### 0.19.1
 
 - **`PlaybookMergeReport.removed_local`** (gurucloudai kanban d6a3598f, DEC

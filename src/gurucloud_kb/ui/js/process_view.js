@@ -50,6 +50,9 @@ export function documentationBanner(who) {
     + 'where the data lives. Automating this flow? Write the runbook as a playbook on the code KB and cite this process by slug.';
 }
 
+/** The one line a person reading a process in the explorer sees about where it came from. */
+export const PROCESS_PROVENANCE = 'Documented by agents from what the client said and showed.';
+
 /** Rows for the hand-off table: one per step, in the given (already sorted) order. */
 export function handoffRows(steps) {
   return (steps || []).map((st, i) => {

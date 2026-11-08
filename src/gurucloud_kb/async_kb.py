@@ -1210,7 +1210,7 @@ class AsyncKnowledgeBank:
         *,
         title: str,
         when_to_use: str,
-        steps: list[PlaybookStepInput] | list[dict[str, Any]],
+        steps: list[PlaybookStepInput] | list[dict[str, Any]] | None = None,
         summary: str = "",
         status: PlaybookStatus | None = None,
         supersedes_slug: str | None = None,
@@ -1227,11 +1227,14 @@ class AsyncKnowledgeBank:
         """Create or update the playbook at ``slug`` (versioned).
 
         ``when_to_use`` is what matching runs on — phrase it the way an agent
-        would describe its task. ``steps`` are replaced wholesale; positions
-        come from list order. ``status`` and ``metadata`` are preserve-on-absent:
-        left as ``None`` they keep the stored values on an existing playbook
-        (a new one defaults to ``"active"`` / ``{}``); pass ``metadata={}`` to
-        clear it. To change one key pass ``metadata_merge`` instead: the
+        would describe its task. ``steps``, when given, are replaced wholesale;
+        positions come from list order. Left as ``None`` on an existing
+        playbook they are kept exactly as stored (a metadata- or header-only
+        edit; the result says ``steps_kept``), and a create without them
+        raises an ``APIError`` with code ``steps_required``. ``status`` and
+        ``metadata`` are preserve-on-absent too: left as ``None`` they keep the
+        stored values on an existing playbook (a new one defaults to
+        ``"active"`` / ``{}``); pass ``metadata={}`` to clear it. To change one key pass ``metadata_merge`` instead: the
         service sets the given keys on top of the stored metadata and deletes
         a key given as ``None`` (not together with ``metadata``). A
         ``metadata`` replace on an existing playbook keeps the reserved keys

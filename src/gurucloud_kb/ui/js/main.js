@@ -33,6 +33,7 @@ import { createEventsView } from './events.js';
 import { createConnectView } from './connect.js';
 import { getToken, tokenGate } from './token.js';
 import { tileValues } from './stats_view.js';
+import { canEdit, descriptionParts, showsOperatorChrome } from './viewer_model.js';
 import { initialPanel, modeChip, normalizeMode, ownsDocumentTitle, showsBackLink, showsBankDescription, visiblePanelIds } from './mode_model.js';
 
 const PANELS = [
@@ -67,22 +68,38 @@ export function bootExplorer(root) {
     getInfo: () => info,
     refreshInfo: () => refreshInfo(),
     activate: (id) => activate(id),
+    // kanban 39aa973f: write controls show only to editors (viewer_model.js).
+    canEdit: () => canEdit(info),
   };
 
   // ── header + stats ─────────────────────────────────────────────────────────
   const titleEl = h('h1', { class: 'kbx-h1' }, root.dataset.kbName || 'Knowledge Bank');
-  const subEl = h('p', { class: 'kbx-sub' }, showsBankDescription(mode) ? (root.dataset.kbDescription || '') : '');
-  if (!showsBankDescription(mode)) subEl.style.display = 'none';
-  const tilesEl = h('div', { class: 'kbx-tiles', style: { marginBottom: '20px' } });
+  // The description is the bank's MCP charter, written for agents: a reader gets
+  // its first sentence, the full text sits behind a disclosure (kanban 39aa973f).
+  const subEl = h('p', { class: 'kbx-sub', dataset: { role: 'bank-lead' } });
+  const charterBody = h('div', { class: 'kbx-charter-body' });
+  const charterEl = h('details', { class: 'kbx-charter', dataset: { role: 'bank-charter' } },
+    h('summary', { dataset: { action: 'explorer_charter_toggle' } }, 'For agents: full bank description'), charterBody);
+  function setDescription(text) {
+    const parts = showsBankDescription(mode) ? descriptionParts(text) : { lead: '', full: '' };
+    subEl.textContent = parts.lead;
+    subEl.style.display = parts.lead ? '' : 'none';
+    charterBody.textContent = parts.full;
+    charterEl.style.display = parts.full ? '' : 'none';
+  }
+  setDescription(root.dataset.kbDescription || '');
+  // Tiles and the id chip are operator chrome: hidden until /info says who is looking.
+  const tilesEl = h('div', { class: 'kbx-tiles', style: { marginBottom: '20px', display: 'none' } });
+  const idChip = h('span', { class: 'kbx-chip muted kbx-mono', title: 'Bank id (used by the SDK and MCP)', style: { display: 'none' } }, String(kbId).slice(0, 8));
 
   const header = h('div', { class: 'kbx-header' },
     h('div', { class: 'kbx-title' },
       h('span', { class: 'kbx-mascot', 'aria-hidden': 'true' }, h('i', {}), h('i', {})),
       h('div', { style: { minWidth: 0 } },
         dashUrl ? h('a', { class: 'kbx-back', href: dashUrl, dataset: { action: 'nav_knowledge_banks' } }, h('i', { class: 'bi bi-arrow-left' }), 'Knowledge Banks') : null,
-        titleEl, subEl)),
+        titleEl, subEl, charterEl)),
     h('div', { class: 'kbx-header-actions' },
-      h('span', { class: 'kbx-chip muted kbx-mono', title: 'KB id' }, String(kbId).slice(0, 8)),
+      idChip,
       modeChip(mode) ? h('span', { class: 'kbx-chip muted' }, modeChip(mode)) : null,
       h('button', { class: 'kbx-btn kbx-btn-ghost', type: 'button', dataset: { action: 'explorer_refresh' }, onClick: () => location.reload() }, h('i', { class: 'bi bi-arrow-clockwise' }), 'Refresh')));
 
@@ -123,13 +140,20 @@ export function bootExplorer(root) {
     try {
       info = await api.info();
       if (info.name) titleEl.textContent = info.name;
-      if (info.description !== undefined && showsBankDescription(mode)) subEl.textContent = info.description || '';
+      if (info.description !== undefined) setDescription(info.description || '');
       if (info.dimension_schema) schema = info.dimension_schema;
       else if (info.dimension_schema === undefined) schema = await api.getSchema().catch(() => null);
       if (info.name && ownsDocumentTitle(mode)) document.title = `${info.name} · KB Explorer`;
-      renderTiles(info, null);
-      api.stats().then((s) => renderTiles(info, s)).catch(() => {});
+      const operator = showsOperatorChrome(info);
+      tilesEl.style.display = operator ? '' : 'none';
+      idChip.style.display = operator ? '' : 'none';
+      if (operator) {
+        renderTiles(info, null);
+        api.stats().then((s) => renderTiles(info, s)).catch(() => {});
+      }
     } catch (e) {
+      tilesEl.style.display = '';
+      idChip.style.display = '';
       renderTiles({}, null);
       toast(`Could not load KB info: ${e.message}`, 'error');
     }

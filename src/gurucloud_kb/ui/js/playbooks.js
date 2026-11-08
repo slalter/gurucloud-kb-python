@@ -29,6 +29,8 @@ export function createPlaybooksView(ctx) {
   statusSelect.addEventListener('change', loadList);
 
   const reload = () => { loadStats(); loadList(); };
+  // kanban 39aa973f: a reader (ctx.canEdit() false) gets no New button; hosts without the hook keep it.
+  const editable = !ctx.canEdit || ctx.canEdit();
   const newBtn = h('button', { class: 'kbx-btn kbx-btn-primary', type: 'button', dataset: { action: 'playbooks_new_open', outcome: 'open' }, onClick: () => openPlaybookEditor(ctx, null, { onSaved: reload, genre: genre || undefined }) }, h('i', { class: 'bi bi-plus-lg' }), 'New');
 
   function renderGenreChips() {
@@ -47,7 +49,7 @@ export function createPlaybooksView(ctx) {
     h('div', { class: 'kbx-card' },
       h('div', { class: 'kbx-card-head' },
         h('div', {}, h('h3', { class: 'kbx-card-title' }, 'Playbooks & processes'), h('div', { class: 'kbx-card-sub' }, 'Playbooks are agent procedures, matched whole and returned complete (list_playbooks → get_playbook). Processes document how the client operates (list_processes → get_process) and are read, never run.')),
-        newBtn),
+        editable ? newBtn : null),
       h('div', { class: 'kbx-row', style: { gap: '14px', alignItems: 'center', flexWrap: 'wrap' } }, genreHost, statHost),
       h('div', { class: 'kbx-searchbar kbx-mt' },
         queryInput,

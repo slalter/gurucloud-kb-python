@@ -16,7 +16,7 @@ import { dimsOf, kindOf, truncate } from './schema_utils.js';
 import { markdownToText } from './markdown_model.js';
 import {
   ACTION_LABEL, DEFAULT_JUDGE_BATCH, KIND_LABEL, KIND_TONE, SCAN_SIZES, VERDICT_LABEL, VERDICT_TONE, applyResultText, attachJudgements,
-  buildApplyRequest, buildJudgeRequest, buildPairsRequest, changeSummary, editLines, filterPairs, judgeFailureText, markPair, nextToJudge, pairKey,
+  buildApplyRequest, buildJudgeRequest, buildPairsRequest, changeSummary, edgeRows, editLines, filterPairs, judgeFailureText, markPair, nextToJudge, pairKey,
   proposalIsActionable, proposalIsApplicable, readSettings, rememberJudgementIds, similarityTone, speedLabel, statsCaption, summarize, wordDiff, writeSettings,
 } from './similar_model.js';
 
@@ -146,17 +146,23 @@ export function createSimilarView(ctx) {
     if (!body) { toast('Nothing to apply for this pair.', 'error'); return; }
     const deletes = body.proposal.changes.filter((c) => c.action === 'delete').length;
     const updates = body.proposal.changes.length - deletes;
+    const links = body.proposal.edges.length;
+    const said = [];
+    if (updates + deletes) said.push(`This rewrites ${updates} and deletes ${deletes} entr${updates + deletes === 1 ? 'y' : 'ies'} in this bank. Rewrites re-embed; deletions keep a snapshot in the audit row.`);
+    if (links) said.push(`It writes ${links} connection${links === 1 ? '' : 's'} between the two entries.`);
     const ok = await confirmModal({
       title: `${KIND_LABEL[body.proposal.kind] || body.proposal.kind}?`,
-      message: `This rewrites ${updates} and deletes ${deletes} entr${updates + deletes === 1 ? 'y' : 'ies'} in this bank. Rewrites re-embed; deletions keep a snapshot in the audit row.`,
+      message: said.join(' '),
       confirmLabel: 'Approve & apply', danger: deletes > 0,
     });
     if (!ok) return;
     applying = true;
     try {
       const out = await api.applyProposal(body);
-      pairs = markPair(pairs, key, { kind: 'applied', status: out && out.status, text: applyResultText(out) });
-      toast(`${KIND_LABEL[body.proposal.kind] || 'Proposal'}: ${out && out.status}`, out && out.status === 'applied' ? 'success' : 'error');
+      // An edges-only proposal changes no entry text: the service says nothing_to_apply, the person sees "connected".
+      const status = out && out.status === 'nothing_to_apply' && out.connections_created > 0 ? 'connected' : out && out.status;
+      pairs = markPair(pairs, key, { kind: 'applied', status, text: applyResultText(out) });
+      toast(`${KIND_LABEL[body.proposal.kind] || 'Proposal'}: ${status}`, status === 'applied' || status === 'connected' ? 'success' : 'error');
       render();
     } catch (e) {
       toast(`Apply failed: ${e.message}`, 'error');
@@ -242,7 +248,7 @@ export function createSimilarView(ctx) {
     const applicable = proposalIsApplicable(prop);
     const outcome = p.outcome;
     const headRight = outcome
-      ? h('span', { class: `kbx-chip ${outcome.kind === 'applied' ? (outcome.status === 'applied' ? 'success' : 'warn') : 'muted'}`, dataset: { role: 'outcome' } },
+      ? h('span', { class: `kbx-chip ${outcome.kind === 'applied' ? (outcome.status === 'applied' || outcome.status === 'connected' ? 'success' : 'warn') : 'muted'}`, dataset: { role: 'outcome' } },
         outcome.kind === 'applied' ? `Applied: ${outcome.status}` : 'Dismissed')
       : h('div', { class: 'kbx-row', style: { gap: '6px' } },
         actionable ? h('button', { class: 'kbx-btn kbx-btn-primary kbx-btn-sm', type: 'button', dataset: { role: 'apply', action: 'similar_apply_pair', outcome: 'request' }, disabled: !applicable || !judgementIds.get(pairKey(p.a.id, p.b.id)),
@@ -279,6 +285,15 @@ export function createSimilarView(ctx) {
         panel.append(h('div', { class: 'kbx-proposal-text' }, truncate(entry.content, 300)));
       }
     });
+    const links = edgeRows(prop, p);
+    if (links.length) {
+      panel.append(h('div', { class: 'kbx-proposal-label' }, `Connect ${links.length === 1 ? 'them' : `them (${links.length})`}`));
+      links.forEach((r) => panel.append(h('div', { class: 'kbx-edge-row', dataset: { role: 'proposed-edge', relation: r.relation } },
+        h('strong', {}, r.from),
+        h('span', { class: `kbx-chip ${r.tone}`, title: r.relation }, r.label),
+        h('strong', {}, r.to),
+        r.note ? h('span', { class: 'kbx-edge-note' }, r.note) : null)));
+    }
     if (!actionable) panel.append(h('div', { class: 'kbx-muted', style: { fontSize: '12px', marginTop: '6px' } }, 'No change proposed.'));
     return panel;
   }

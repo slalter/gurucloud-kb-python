@@ -99,6 +99,13 @@
   overflow-wrap: anywhere;
 }
 .kbx-sub { color: var(--kbx-muted); font-size: var(--mk-para-s-size); margin: 2px 0 0; }
+/* Bank charter (agent-facing description) behind a disclosure; kanban 39aa973f. */
+.kbx-charter { margin: 4px 0 0; font-size: 12px; color: var(--kbx-muted); }
+.kbx-charter > summary { cursor: pointer; width: fit-content; }
+.kbx-charter > summary:hover, .kbx-charter > summary:focus-visible { color: var(--kbx-heading); }
+.kbx-charter-body { max-width: 72ch; white-space: pre-line; overflow-wrap: anywhere; margin-top: 6px; padding: 10px 12px; border-radius: 8px; background: var(--kbx-surface-2, rgba(0,0,0,.03)); color: var(--kbx-body); max-height: 260px; overflow-y: auto; }
+.kbx-handoff-details { margin: 10px 0 4px; }
+.kbx-handoff-details > summary { cursor: pointer; font-size: 14px; font-weight: 600; color: var(--kbx-heading); margin-bottom: 6px; }
 .kbx-header-actions { display: flex; align-items: center; gap: var(--mk-space-sm); flex-wrap: wrap; }
 
 /* Guru mascot mark — teal circle + white pill pupils (binding brand rule,
@@ -432,6 +439,8 @@
 .kbx-proposal-label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--kbx-muted); margin: 8px 0 4px; }
 .kbx-edit { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 8px; align-items: start; margin: 4px 0; font-size: 13px; line-height: 1.5; }
 .kbx-edit-tag { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--kbx-muted); padding-top: 2px; }
+.kbx-edge-row { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; margin: 4px 0; font-size: 13px; line-height: 1.5; }
+.kbx-edge-note { flex: 1 1 220px; min-width: 0; font-size: 12px; color: var(--kbx-muted); overflow-wrap: anywhere; }
 .kbx-diff { white-space: pre-wrap; overflow-wrap: anywhere; padding: 6px 10px; border: 1px solid var(--kbx-border); border-radius: var(--kbx-radius-sm); background: var(--kbx-surface-2); }
 .kbx-diff del { background: #fbe0e0; color: #7a1f1f; text-decoration: line-through; border-radius: 2px; }
 .kbx-diff ins { background: #dcf1e2; color: #1f5a30; text-decoration: none; border-radius: 2px; }

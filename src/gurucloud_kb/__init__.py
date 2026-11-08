@@ -87,6 +87,7 @@ from gurucloud_kb.types import (
     ProposalKind,
     ProposedChange,
     ProposedEdit,
+    ProposedEdge,
     MetadataFacet,
     PairEntry,
     PairJudgement,
@@ -224,6 +225,7 @@ __all__ = [
     "ProposalKind",
     "ProposedChange",
     "ProposedEdit",
+    "ProposedEdge",
     "MetadataFacet",
     "PairEntry",
     "PairJudgement",
@@ -321,4 +323,4 @@ __all__ = [
     "OverlapCandidate",
 ]
 
-__version__ = "0.19.1"
+__version__ = "0.19.4"

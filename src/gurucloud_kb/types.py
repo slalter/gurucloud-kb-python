@@ -515,12 +515,24 @@ class ProposedChange(TypedDict, total=False):
     useful_for: str | None  # full replacement useful_for (update), when it changes
 
 
+class ProposedEdge(TypedDict, total=False):
+    """A typed connection the judge proposes between the pair's two entries.
+    ``edge_type`` is one of the bank's edge relations (built-ins plus any it
+    declares); a symmetric relation is written both ways on apply."""
+
+    from_entry_id: str
+    to_entry_id: str
+    edge_type: str
+    note: str
+
+
 class PairProposal(TypedDict, total=False):
     """The concrete change the judge proposes for a pair; a person approves it."""
 
     kind: ProposalKind
     rationale: str
     changes: list[ProposedChange]
+    edges: list[ProposedEdge]  # typed connections to write between the pair (platform >= this release)
 
 
 class PairJudgement(TypedDict, total=False):
@@ -554,6 +566,8 @@ class ApplyProposalResult(TypedDict, total=False):
     kind: ProposalKind
     changes: list[AppliedChange]
     application_id: str | None  # audit row id on the platform
+    connections_created: int  # typed edges written for the proposal's edges
+    connection_errors: list[str]  # proposed edges that were not written, and why
 
 
 class SimilarPair(TypedDict, total=False):
@@ -1007,6 +1021,8 @@ class PlaybookWriteResult(TypedDict, total=False):
     """Active siblings that already overlapped this playbook before the write."""
     merge: PlaybookMergeReport | None
     """Present on a ``base_version`` merge write."""
+    steps_kept: bool
+    """True when the request omitted ``steps`` and the stored steps were carried into this version."""
 
 
 class PlaybookFieldChange(TypedDict, total=False):

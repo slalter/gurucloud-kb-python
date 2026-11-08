@@ -163,6 +163,20 @@ class TestSyncPlaybooks:
         body = json.loads(route.calls.last.request.content)
         assert body["status"] == "draft" and body["metadata"] == {}
 
+    def test_upsert_without_steps_leaves_them_off_the_wire(self, kb) -> None:
+        """Preserve-on-absent for steps (gurucloud-kb 0.19.4, kanban d3559de4):
+        a metadata-only edit sends no steps key and reads steps_kept back."""
+        route = respx.put(f"{API_PREFIX}/banks/kb-1/playbooks/pm-sweep").mock(
+            return_value=httpx.Response(200, json={"data": {"action": "updated", "playbook": PLAYBOOK, "steps_kept": True}})
+        )
+        out = kb.upsert_playbook(
+            "pm-sweep", title="PM sweep", when_to_use="hourly filing of cards",
+            metadata_merge={"approved_by": "owner"}, change_note="owner approved",
+        )
+        body = json.loads(route.calls.last.request.content)
+        assert "steps" not in body and body["metadata_merge"] == {"approved_by": "owner"}
+        assert out.get("steps_kept") is True
+
     def test_upsert_sends_metadata_merge_only_when_given(self, kb) -> None:
         route = respx.put(f"{API_PREFIX}/banks/kb-1/playbooks/pm-sweep").mock(
             return_value=httpx.Response(200, json={"data": {
@@ -273,6 +287,8 @@ class TestAsyncPlaybooks:
                 assert dict(list_route.calls.last.request.url.params) == {"status": "active", "limit": "25", "query": "file cards"}
                 pb = await kb.get_playbook("pm-sweep")
                 assert len(pb.get("steps") or []) == 2
+                await kb.upsert_playbook("pm-sweep", title="PM sweep", when_to_use="hourly filing", metadata_merge={"k": 1})
+                assert "steps" not in json.loads(put_route.calls.last.request.content)
                 res = await kb.upsert_playbook("pm-sweep", title="PM sweep", when_to_use="hourly filing of cards", steps=[{"title": "a", "body": "b"}])
                 assert res.get("action") == "updated"
                 put_body = json.loads(put_route.calls.last.request.content)

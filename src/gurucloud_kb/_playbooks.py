@@ -34,7 +34,7 @@ def upsert_body(
     *,
     title: str,
     when_to_use: str,
-    steps: list[PlaybookStepInput] | list[dict[str, Any]],
+    steps: list[PlaybookStepInput] | list[dict[str, Any]] | None,
     summary: str,
     status: PlaybookStatus | None,
     supersedes_slug: str | None,
@@ -60,15 +60,18 @@ def upsert_body(
     (server-side three-way merge) travel only when given; the service refuses
     the two together. In both modes ``steps`` is the COMPLETE list: a merge
     keeps upstream edits to steps you did not touch, it never fills in steps
-    you left out, and an omitted step is a deletion.
+    you left out, and an omitted step is a deletion. ``steps=None`` leaves the
+    key off the wire: the service keeps the stored steps of an existing slug
+    (``steps_kept`` on the result) and refuses a create with ``steps_required``.
     """
     body: dict[str, Any] = {
         "title": title,
         "when_to_use": when_to_use,
-        "steps": [dict(step) for step in steps],
         "summary": summary,
         "change_note": change_note,
     }
+    if steps is not None:
+        body["steps"] = [dict(step) for step in steps]
     if genre:
         body["genre"] = genre
     if status is not None:

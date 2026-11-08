@@ -5,6 +5,8 @@
    Everything that is not DOM lives here so Node can test it
    (tests/test_kb_explorer_similar_model.js). */
 
+import { relationLabel, relationTone } from './connections_model.js';
+
 export const DEFAULTS = { threshold: 0.88, neighbors: 3, limit: 100, maxEntries: 2000 };
 export const SCAN_SIZES = [500, 2000, 5000, 20000];
 export const MAX_JUDGE_BATCH = 25;
@@ -69,9 +71,28 @@ export const KIND_LABEL = {
 };
 export const KIND_TONE = { merge: 'danger', delete_one: 'danger', trim_overlap: 'warn', review_conflict: 'warn', cross_reference: 'info', keep_separate: 'muted' };
 
-/** Whether a proposal changes anything (and so can be applied). */
+/** Whether a proposal changes anything (and so can be applied): a real
+    change to an entry, or at least one typed edge to write (kanban 5567fc2d). */
 export function proposalIsActionable(proposal) {
-  return !!proposal && Array.isArray(proposal.changes) && proposal.changes.some((c) => c && c.action && c.action !== 'none');
+  if (!proposal) return false;
+  const changes = Array.isArray(proposal.changes) && proposal.changes.some((c) => c && c.action && c.action !== 'none');
+  return changes || proposalEdges(proposal).length > 0;
+}
+
+/** The proposal's typed edges (well-formed ones only). */
+export function proposalEdges(proposal) {
+  const edges = proposal && Array.isArray(proposal.edges) ? proposal.edges : [];
+  return edges.filter((e) => e && e.from_entry_id && e.to_entry_id && e.edge_type);
+}
+
+/** One display row per proposed edge: "A supersedes B", with the chip tone
+    the entry-detail connections section uses for that relation. */
+export function edgeRows(proposal, pair) {
+  const side = (id) => (pair && pair.a && id === pair.a.id ? 'A' : pair && pair.b && id === pair.b.id ? 'B' : String(id).slice(0, 8));
+  return proposalEdges(proposal).map((e) => ({
+    from: side(e.from_entry_id), to: side(e.to_entry_id), relation: e.edge_type,
+    label: relationLabel(e.edge_type, 'outgoing'), tone: relationTone(e.edge_type), note: e.note || '',
+  }));
 }
 
 /** Body for POST /similar-pairs/apply from a judged pair. */
@@ -84,7 +105,7 @@ export function buildApplyRequest(pair, judgementId, { reason } = {}) {
       const out = { entry_id: c.entry_id, action: c.action };
       if (c.action === 'update') { if (c.content) out.content = c.content; if (c.useful_for) out.useful_for = c.useful_for; }
       return out;
-    }) },
+    }), edges: proposalEdges(j.proposal).map((e) => ({ from_entry_id: e.from_entry_id, to_entry_id: e.to_entry_id, edge_type: e.edge_type, note: e.note || '' })) },
   };
   if (reason && String(reason).trim()) body.reason = String(reason).trim();
   return body;
@@ -123,10 +144,14 @@ export function applyResultText(result) {
   const applied = (result.changes || []).filter((c) => c.status === 'applied').length;
   const skipped = (result.changes || []).filter((c) => c.status === 'skipped');
   const failed = (result.changes || []).filter((c) => c.status === 'failed');
-  const parts = [`${applied} of ${n} change${n === 1 ? '' : 's'} applied`];
+  const parts = n ? [`${applied} of ${n} change${n === 1 ? '' : 's'} applied`] : [];
   if (skipped.length) parts.push(`${skipped.length} skipped (${skipped.map((c) => c.error || 'skipped').join('; ')})`);
   if (failed.length) parts.push(`${failed.length} failed (${failed.map((c) => c.error || 'failed').join('; ')})`);
-  return parts.join(' · ');
+  const made = Number(result.connections_created || 0);
+  if (made) parts.push(`${made} connection${made === 1 ? '' : 's'} written`);
+  const notMade = Array.isArray(result.connection_errors) ? result.connection_errors : [];
+  if (notMade.length) parts.push(`${notMade.length} connection${notMade.length === 1 ? '' : 's'} not written (${notMade.join('; ')})`);
+  return parts.length ? parts.join(' · ') : 'Nothing changed.';
 }
 
 /** Judgements folded onto the pairs they belong to (by id pair). */
