@@ -26,6 +26,7 @@ or from a shell: ``gurucloud-kb ui --kb my-kb`` (see :mod:`gurucloud_kb.cli`).
 
 from __future__ import annotations
 
+import getpass
 import json
 import mimetypes
 import threading
@@ -36,15 +37,18 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
+from gurucloud_kb.agents.service import AGENT_TOPOLOGY_PATH, handle_agent_topology_request
 from gurucloud_kb.errors import APIError, ConnectionError as SDKConnectionError, PlaybookOverlapError
 
 if TYPE_CHECKING:  # pragma: no cover
     from gurucloud_kb._http import HTTPClient
+    from gurucloud_kb.agents.service import AgentTopologyService
     from gurucloud_kb.client import GuruCloudClient
 
 EXPLORER_PREFIX = "/api/kb-explorer/"
 BANKS_PATH = "/api/kb-explorer-banks"
 STATS_PATH = "/api/kb-explorer-bank-stats"
+AGENTS_PAGE = "/agents"
 UI_DIR = Path(__file__).resolve().parent / "ui"
 
 _STATIC_TYPES = {
@@ -74,13 +78,15 @@ def render_index(
     banks_url: str = BANKS_PATH,
     stats_url: str = STATS_PATH,
     token_gate: bool = False,
+    agents_url: str = "",
 ) -> str:
     """The standalone host page with its placeholders filled in.
 
     ``api_base`` keeps the literal ``{kb}`` — the UI substitutes the selected
     bank id itself. ``token_gate`` makes the page ask for a bearer token and send
     it on every API call (the self-hosted platform needs that; the SDK server
-    holds the key server-side and does not).
+    holds the key server-side and does not). ``agents_url`` (when the host
+    serves agent bindings) makes the bank picker link to the Agents view.
     """
     html = (UI_DIR / "index.html").read_text(encoding="utf-8")
     return (
@@ -88,6 +94,31 @@ def render_index(
         .replace("{{API_BASE}}", api_base)
         .replace("{{BANKS_URL}}", banks_url)
         .replace("{{STATS_URL}}", stats_url)
+        .replace("{{TOKEN_GATE}}", 'data-token-gate="1"' if token_gate else "")
+        .replace("{{AGENTS_ATTR}}", f'data-agents-url="{_attr(agents_url)}"' if agents_url else "")
+    )
+
+
+def _attr(value: str) -> str:
+    return value.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
+
+
+def render_agents_page(
+    *,
+    topology_url: str = AGENT_TOPOLOGY_PATH,
+    explorer_url: str = "/",
+    token_gate: bool = False,
+) -> str:
+    """The Agents view host page (``agents.html``) with its placeholders filled in.
+
+    ``topology_url`` is the base of the ``/api/agent-topology*`` routes;
+    ``explorer_url`` is where a clicked bank opens (``?kb=<bank_id>`` is
+    appended).
+    """
+    html = (UI_DIR / "agents.html").read_text(encoding="utf-8")
+    return (
+        html.replace("{{TOPOLOGY_URL}}", _attr(topology_url))
+        .replace("{{EXPLORER_URL}}", _attr(explorer_url))
         .replace("{{TOKEN_GATE}}", 'data-token-gate="1"' if token_gate else "")
     )
 
@@ -222,8 +253,19 @@ def _safe_static_path(url_path: str) -> Optional[Path]:
     return candidate if candidate.is_file() else None
 
 
-def make_handler(proxy: ExplorerProxy, *, default_kb: Optional[str], log: Optional[Callable[[str], None]] = None):
-    """Build the request handler class bound to one proxy."""
+def make_handler(
+    proxy: ExplorerProxy,
+    *,
+    default_kb: Optional[str],
+    log: Optional[Callable[[str], None]] = None,
+    agents: "Optional[AgentTopologyService]" = None,
+    actor: str = "local",
+):
+    """Build the request handler class bound to one proxy.
+
+    With ``agents`` the server also serves the Agents view (``/agents``) and
+    its ``/api/agent-topology*`` routes; every change is recorded as ``actor``.
+    """
 
     class ExplorerHandler(BaseHTTPRequestHandler):
         server_version = "gurucloud-kb-ui/1"
@@ -263,6 +305,16 @@ def make_handler(proxy: ExplorerProxy, *, default_kb: Optional[str], log: Option
         def _dispatch(self, method: str) -> None:
             parts = urlsplit(self.path)
             path = parts.path
+            if path == AGENT_TOPOLOGY_PATH or path.startswith(AGENT_TOPOLOGY_PATH + "/"):
+                if agents is None:
+                    self._send_json(404, {"error": "Agent bindings are not configured on this server", "details": None})
+                    return
+                body = self._read_body() if method in {"PUT", "DELETE"} else None
+                status, payload = handle_agent_topology_request(
+                    agents, method, path, query=parts.query, body=body, actor=actor
+                )
+                self._send_json(status, payload)
+                return
             if path.startswith(EXPLORER_PREFIX):
                 rest = path[len(EXPLORER_PREFIX):]
                 kb, _, sub = rest.partition("/")
@@ -284,8 +336,15 @@ def make_handler(proxy: ExplorerProxy, *, default_kb: Optional[str], log: Option
             if method != "GET":
                 self._send_json(405, {"error": "Method not allowed"})
                 return
+            if path in (AGENTS_PAGE, "/agents.html"):
+                if agents is None:
+                    self._send_json(404, {"error": "Agent bindings are not configured on this server"})
+                    return
+                page = render_agents_page()
+                self._send_bytes(200, page.encode("utf-8"), "text/html; charset=utf-8")
+                return
             if path in ("/", "/index.html"):
-                html = render_index(mode="sdk")
+                html = render_index(mode="sdk", agents_url=AGENTS_PAGE if agents is not None else "")
                 self._send_bytes(200, html.encode("utf-8"), "text/html; charset=utf-8")
                 return
             static = _safe_static_path(path)
@@ -364,17 +423,27 @@ def start_ui_server(
     host: str = "127.0.0.1",
     port: int = 8765,
     log: Optional[Callable[[str], None]] = None,
+    agents: "Optional[AgentTopologyService]" = None,
+    actor: Optional[str] = None,
 ) -> UIServer:
     """Bind the explorer server (not yet serving). ``port=0`` picks a free port.
 
     ``kb`` (id or exact name) preselects a bank in the URL; without it the page
-    lists the banks the key can see.
+    lists the banks the key can see. ``agents`` adds the Agents view; changes
+    made there are recorded as ``actor`` (default ``local:<os user>``).
     """
     proxy = ExplorerProxy(client._http)  # noqa: SLF001 - same package
-    handler = make_handler(proxy, default_kb=kb, log=log)
+    handler = make_handler(proxy, default_kb=kb, log=log, agents=agents, actor=actor or _local_actor())
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.daemon_threads = True
     return UIServer(httpd, kb=kb)
+
+
+def _local_actor() -> str:
+    try:
+        return f"local:{getpass.getuser()}"
+    except Exception:  # noqa: BLE001 - no login name in some containers
+        return "local"
 
 
 def serve_ui(
@@ -385,6 +454,7 @@ def serve_ui(
     port: int = 8765,
     open_browser: bool = True,
     log: Optional[Callable[[str], None]] = print,
+    agents: "Optional[AgentTopologyService]" = None,
 ) -> None:
     """Serve the explorer and block until Ctrl-C.
 
@@ -393,10 +463,14 @@ def serve_ui(
         kb: Bank id or exact name to open; omit for the bank picker.
         host / port: Bind address (loopback by default — the key stays local).
         open_browser: Open the page in the default browser once serving.
+        agents: Serve the Agents view over this service (see
+            :mod:`gurucloud_kb.agents`).
     """
-    server = start_ui_server(client, kb=kb, host=host, port=port, log=None)
+    server = start_ui_server(client, kb=kb, host=host, port=port, log=None, agents=agents)
     if log:
         log(f"KB Explorer serving at {server.url}  (Ctrl-C to stop)")
+        if agents is not None:
+            log(f"Agents view at http://{server.host}:{server.port}{AGENTS_PAGE}")
     if open_browser:
         threading.Timer(0.4, lambda: webbrowser.open(server.url)).start()
     server.serve_forever()

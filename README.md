@@ -909,6 +909,80 @@ definition, generated tools).
 kb.list_recent_queries(limit=20)   # {"queries": [{query_text, duration_ms, result_count, filters_used, query_source, created_at}, …], "limit": 20}
 ```
 
+## Agent <-> KB bindings (`gurucloud_kb.agents`)
+
+When several agents share several banks, `gurucloud_kb.agents` keeps who
+mounts what, with which access, in one contract, and turns it into the Claude
+Agent SDK options at turn time. Prompts, models and schedules stay in your app;
+only bindings live here.
+
+```python
+import os
+
+from claude_agent_sdk import ClaudeAgentOptions
+from gurucloud_kb.agents import (
+    AgentSpec, AgentTopologyService, BankRef, Binding, InMemoryBindingStore,
+)
+
+banks = [
+    BankRef("ops", "Ops KB", "https://kb.example.com/kb/ops/mcp", auth_ref="OPS_KB_TOKEN"),
+    BankRef("playbooks", "Playbooks", "https://kb.example.com/kb/play/mcp", kind="playbook"),
+]
+agents = [
+    AgentSpec("base", "Base", baseline=(Binding("base", "playbooks", "read"),)),
+    AgentSpec("triage", "Triage", parent_id="base",
+              baseline=(Binding("triage", "ops", "capture"),)),
+]
+service = AgentTopologyService(agents, banks, InMemoryBindingStore())
+
+plan = service.mount_plan("triage", headers_for=lambda b: {"Authorization": f"Bearer {os.environ[b.auth_ref]}"})
+options = ClaudeAgentOptions(mcp_servers=plan.mcp_servers, disallowed_tools=list(plan.disallowed_tools))
+```
+
+- **Access** per agent and bank: `read` (write tools denied), `read_write`,
+  `capture` (write tools denied; `plan.capture_banks` tells you which mounts to
+  wrap with your own held-write server) and `removed` (not mounted). An
+  optional `allowed_tools` list narrows a binding further; pass
+  `available_tools={bank_id: available_tools_from_definition(kb.get_mcp_server_definition())}`
+  so the allowlist can deny every other tool the bank serves.
+- **Inheritance**: an agent with `parent_id` inherits the parent's code
+  baseline; its own bindings win per bank. Overrides never inherit.
+- **Overrides** are stored deviations from the baseline. Implement the
+  `BindingStore` protocol over your own database (`list_overrides`,
+  `get_override`, `write_override`, `delete_override`, `list_events`; write the
+  override and its event in one transaction). `AgentTopologyService` owns the
+  rules: unknown agents or banks are refused, every change names its actor and
+  writes a `BindingOverrideEvent`, and setting the baseline value clears the
+  row. If the store cannot be read, mounts fall back to the baseline and the
+  plan says so (`overrides_applied=False`, `store_error`).
+- **Without the service**: `resolve_mounts(agent, banks, overrides, agents=...)`
+  is the same resolution as a pure function, and `build_topology(...)` returns
+  the graph document.
+
+**The Agents view.** The bundled UI has an Agents page: a Cytoscape graph of
+agents, banks and inheritance, a side panel with each agent's mount plan and
+denied tools, and per-binding access edits with a reason and the change
+history. Locally:
+
+```bash
+gurucloud-kb ui --agents agents.json    # Agents view at http://127.0.0.1:8765/agents
+```
+
+`agents.json` is `{"v": 1, "banks": [...], "agents": [...], "overrides": [...]}`
+in the `to_dict()` shapes (see `gurucloud_kb.agents.registry`); overrides made
+in the local view live in memory. A host serves the same page (`agents.html`,
+filled by `ui_server.render_agents_page`) and the same routes by passing each
+request to `handle_agent_topology_request(service, method, path, query=...,
+body=..., actor=<signed-in user>)`:
+
+| Route | Does |
+|---|---|
+| `GET /api/agent-topology` | the graph document |
+| `GET /api/agent-topology/events?agent=&bank=&limit=` | override history, newest first |
+| `GET /api/agent-topology/agents/<agent>/mounts` | one agent's mount plan (headers masked) |
+| `PUT /api/agent-topology/overrides` | `{agent_id, bank_id, access, allowed_tools?, reason?}` |
+| `DELETE /api/agent-topology/overrides/<agent>/<bank>?reason=` | back to the baseline |
+
 ## Manage KBs and API keys (client scope)
 
 ```python
@@ -1048,6 +1122,41 @@ edit the harness, they file a card.
 ---
 
 ## Changelog
+
+### 0.20.1
+
+- **modreg `ledger decide` keeps the stored reason** (gurucloudai kanban
+  46252b79): a decide without `--reason` keeps the reason the earlier
+  decision recorded, like `--purity` and `--kb-entry-id`, instead of
+  writing NULL. `duplicate_of` is kept on a `duplicate_of` re-decide that
+  omits it and cleared by any other decision.
+
+### 0.20.0
+
+- **Agent <-> KB bindings** (gurucloudai kanban 5e79423b): new
+  `gurucloud_kb.agents` with the v1 binding contract (`BankRef`, `AgentSpec`,
+  `Binding`, `BindingOverride`, `BindingOverrideEvent`), `resolve_mounts()`
+  (Agent SDK `mcp_servers` + `disallowed_tools`), `build_topology()`, the
+  `BindingStore` protocol with an in-memory store, `AgentTopologyService` and
+  the host-neutral `handle_agent_topology_request()` route function.
+- **Agents view** in the UI bundle (`agents.html`, `js/agents.js`, pure
+  `js/agents_model.js`): graph of agents and banks, mount plans, access edits
+  with history. `gurucloud-kb ui --agents FILE` serves it at `/agents`; the
+  bank picker links to it when the host sets `data-agents-url`
+  (`render_index(agents_url=...)`).
+
+### 0.19.5
+
+- **Ask tab: citation provenance and per-call detail** (gurucloudai kanban
+  3f60a3d3). Each citation chip in the answer says how the model reached the
+  entry (`retrieved`, `walked`, `read`, `pointer`, `unseen`) with a tooltip
+  such as "cited · walked, 2 hops from 1c4aaa2c @ step 3", and a footer counts
+  the citations reached only by walking the graph. Node tooltips and the
+  Selected card list every role an entry played, with its step. Every tool call
+  has a "Call details" panel (arguments as sent, timing, counts, raw in/out);
+  walks list every node and edge behind "Show all"; steps show their token
+  usage. Pure helpers in `ask_model.js`: `citationProvenance`, `provenanceLine`,
+  `traceLine`, `callDetail`, `usageText`, `walkByDepth`, `originKind`.
 
 ### 0.19.4
 

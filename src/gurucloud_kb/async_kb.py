@@ -794,7 +794,11 @@ class AsyncKnowledgeBank:
         return await self._http.put(self._path("/edge-relations"), json=body)
 
     async def connection_stats(self) -> EdgeStats:
-        """Counts by type and by source, and how many entries are connected."""
+        """Counts by type and by source, how many entries are connected, and the
+        graph shape over entry-to-entry connections (``entry_count``,
+        ``entry_to_entry``, ``average_degree``, ``isolated_entries``,
+        ``max_degree``). Track ``average_degree`` beside your retrieval hit
+        rate: more connections help only while pointers stay relevant."""
         return await self._http.get(self._path("/edge-stats"))
 
     async def graph_layout(self, *, space: str = "content") -> GraphLayout:

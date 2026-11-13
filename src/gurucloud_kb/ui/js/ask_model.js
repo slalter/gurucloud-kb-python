@@ -229,7 +229,10 @@ const textOf = (e) => short((e && (e.summary || e.useful_for || e.text || e.snip
     rank or summary) read the same. */
 export function searchRows(out) {
   const rows = Array.isArray(out && out.results) ? out.results : [];
-  return rows.filter((r) => r && r.id).map((r, i) => ({ id: r.id, rank: Number(r.rank) || i + 1, text: textOf(r), related: Array.isArray(r.related) ? r.related : [] }));
+  return rows.filter((r) => r && r.id).map((r, i) => {
+    const sc = [r.score, r.combined_score, r.similarity].map(Number).find((v) => Number.isFinite(v));
+    return { id: r.id, rank: Number(r.rank) || i + 1, text: textOf(r), related: Array.isArray(r.related) ? r.related : [], score: sc === undefined ? null : sc };
+  });
 }
 
 /** Playbooks a search matched (the mount's `matched_playbooks` / `playbooks` / `processes`): [{slug, title, hint}]. */
@@ -405,11 +408,33 @@ function paintNode(nodes, id, kind, extra = {}) {
   const cur = nodes.get(id);
   const roles = new Set(cur ? cur.roles : []);
   roles.add(kind);
-  if (!cur || KIND_RANK[kind] < KIND_RANK[cur.kind]) nodes.set(id, { ...(cur || {}), ...extra, id, kind, roles, text: extra.text || (cur && cur.text) || '', note: extra.note || (cur && cur.note) || '', rank: kind === 'hit' ? (extra.rank || 0) : (cur && cur.kind === 'hit' ? cur.rank : (cur && cur.rank) || 0), step: Math.min(extra.step || Infinity, cur && cur.step ? cur.step : Infinity) });
-  else { cur.roles = roles; if (extra.text && !cur.text) cur.text = extra.text; if (extra.note && !cur.note) cur.note = extra.note; }
+  // How the model got here: the FIRST time each role surfaced this id (step, tool, what it was).
+  const trace = cur ? cur.trace : [];
+  if (extra.via && !trace.some((t) => t.role === kind)) trace.push({ role: kind, ...extra.via });
+  if (!cur || KIND_RANK[kind] < KIND_RANK[cur.kind]) nodes.set(id, { ...(cur || {}), ...extra, id, kind, roles, trace, text: extra.text || (cur && cur.text) || '', note: extra.note || (cur && cur.note) || '', rank: kind === 'hit' ? (extra.rank || 0) : (cur && cur.kind === 'hit' ? cur.rank : (cur && cur.rank) || 0), step: Math.min(extra.step || Infinity, cur && cur.step ? cur.step : Infinity) });
+  else { cur.roles = roles; cur.trace = trace; if (extra.text && !cur.text) cur.text = extra.text; if (extra.note && !cur.note) cur.note = extra.note; }
+}
+
+const ROLE_WORD = { hit: 'retrieved', folded: 'pointer', neighbor: 'one hop away', read: 'read', walk: 'walked', cited: 'cited' };
+/** The colour a node earns from how it was reached, ignoring `cited` (a cited node keeps this under its citation ring). */
+export function originKind(roles) {
+  const rs = roles instanceof Set ? roles : new Set(roles || []);
+  return KINDS.find((k) => k !== 'cited' && rs.has(k)) || null;
+}
+/** "walked, 2 hops from 1c4aaa2c @ step 3" for one trace row. */
+export function traceLine(t) {
+  if (!t) return '';
+  return `${ROLE_WORD[t.role] || t.role}${t.detail ? `, ${t.detail}` : ''}${t.step ? ` @ step ${t.step}` : ''}`;
 }
 
 function pairKey(a, b) { return a < b ? `${a}|${b}` : `${b}|${a}`; }
+
+function relWord(r) { return String(r || 'connected').replace(/_/g, ' '); }
+function searchQueryText(call) {
+  const a = (call && call.arguments) || {};
+  const q = a.query || a.content_query || a.useful_for_query || a.relevant_systems_query || a.relevant_tasks_query || a.text;
+  return q ? short(q, 60) : '';
+}
 
 /** Everything the model touched up to `uptoStep` (default: all), in the
     `answer` shape graph_model.scene() paints: nodes {data:{id, kind, rank,
@@ -432,12 +457,14 @@ export function trailPicture(trail, { uptoStep = Infinity } = {}) {
       const kind = toolKind(c.call.name);
       if (kind === 'search') {
         searchRows(out).forEach((r) => {
-          paintNode(nodes, r.id, 'hit', { rank: r.rank, text: r.text, step: step.no });
+          const callVia = { step: step.no, tool: c.call.name, callId: c.call.call_id };
+          const q = searchQueryText(c.call);
+          paintNode(nodes, r.id, 'hit', { rank: r.rank, text: r.text, step: step.no, via: { ...callVia, detail: `#${r.rank}${q ? ` for “${q}”` : ''}` } });
           r.related.forEach((p) => {
             if (!p || !p.id) return;
             const pk = p.kind === 'neighbor' ? 'neighbor' : 'folded';
-            paintNode(nodes, p.id, pk, { text: p.text || '', note: p.note || '', step: step.no });
             const from = p.via || r.id;
+            paintNode(nodes, p.id, pk, { text: p.text || '', note: p.note || '', step: step.no, via: { ...callVia, detail: `via “${relWord(p.relation)}” from ${String(from).slice(0, 8)}` } });
             const [s, t] = p.direction === 'incoming' ? [p.id, from] : [from, p.id];
             addEdge(s, t, p.relation, p.note, 'pointer', step.no);
           });
@@ -445,10 +472,11 @@ export function trailPicture(trail, { uptoStep = Infinity } = {}) {
       } else if (kind === 'read') {
         const e = readEntry(out);
         if (!e) return;
-        paintNode(nodes, e.id, 'read', { text: e.text, step: step.no });
+        const callVia = { step: step.no, tool: c.call.name, callId: c.call.call_id };
+        paintNode(nodes, e.id, 'read', { text: e.text, step: step.no, via: { ...callVia, detail: 'in full' } });
         e.connections.forEach((k) => {
           if (k.kind === 'playbook_step' || !k.id) return;
-          paintNode(nodes, k.id, 'neighbor', { text: k.text || '', note: k.note || '', step: step.no });
+          paintNode(nodes, k.id, 'neighbor', { text: k.text || '', note: k.note || '', step: step.no, via: { ...callVia, detail: `via “${relWord(k.relation)}” ${k.direction === 'incoming' ? 'into' : 'from'} ${String(e.id).slice(0, 8)}` } });
           const [s, t] = k.direction === 'incoming' ? [k.id, e.id] : [e.id, k.id];
           addEdge(s, t, k.relation, k.note, 'pointer real', step.no);
         });
@@ -456,10 +484,11 @@ export function trailPicture(trail, { uptoStep = Infinity } = {}) {
         const pb = playbookRead(out);
         if (!pb) return;
         // The procedure itself is not an entry; the entries its steps cite light up as read.
-        pb.entries.forEach((e) => paintNode(nodes, e.id, 'read', { text: e.text, note: e.note || (e.step ? `${pb.slug} step ${e.step}` : ''), step: step.no }));
+        pb.entries.forEach((e) => paintNode(nodes, e.id, 'read', { text: e.text, note: e.note || (e.step ? `${pb.slug} step ${e.step}` : ''), step: step.no, via: { step: step.no, tool: c.call.name, callId: c.call.call_id, detail: `cited by playbook ${pb.slug}${e.step ? ` step ${e.step}` : ''}` } }));
       } else if (kind === 'walk') {
         const w = walkRead(out);
-        w.nodes.forEach((n) => paintNode(nodes, n.id, n.depth === 0 ? 'read' : 'walk', { text: n.text || '', step: step.no }));
+        const root8 = String(w.root || '?').slice(0, 8);
+        w.nodes.forEach((n) => paintNode(nodes, n.id, n.depth === 0 ? 'read' : 'walk', { text: n.text || '', step: step.no, via: { step: step.no, tool: c.call.name, callId: c.call.call_id, depth: n.depth, root: w.root || null, walkRoot: n.depth === 0, detail: n.depth === 0 ? 'as the root of a walk' : `${n.depth} hop${n.depth === 1 ? '' : 's'} from ${root8}` } }));
         w.edges.forEach((e) => addEdge(e.from, e.to, e.relation, e.note, 'walk', step.no));
       }
     });
@@ -467,8 +496,12 @@ export function trailPicture(trail, { uptoStep = Infinity } = {}) {
   const answerStep = steps.find((s) => s.status === 'answered' || s.status === 'step_limit');
   const cited = answerStep ? (trail.citations || []) : [];
   // A cited playbook slug is a procedure, not an entry: it is listed, never drawn.
-  cited.filter((id) => isEntryId(id) || nodes.has(id)).forEach((id) => paintNode(nodes, id, 'cited', { step: answerStep.no }));
-  const nodeList = [...nodes.values()].map((n) => ({ data: { id: n.id, kind: n.kind, rank: n.rank || 0, label: n.kind === 'hit' && n.rank ? `#${n.rank} ${n.text}` : n.text, text: n.text, note: n.note, step: n.step === Infinity ? 0 : n.step } }));
+  cited.filter((id) => isEntryId(id) || nodes.has(id)).forEach((id) => paintNode(nodes, id, 'cited', { step: answerStep.no, via: { step: answerStep.no, tool: null, callId: null, detail: 'in the answer' } }));
+  const nodeList = [...nodes.values()].map((n) => {
+    const roles = KINDS.filter((k) => n.roles.has(k));
+    const via = n.trace.find((t) => t.role !== 'cited') || null;
+    return { data: { id: n.id, kind: n.kind, origin: originKind(n.roles), roles, trace: n.trace.slice().sort((a, b) => (a.step || 0) - (b.step || 0)), via, rank: n.rank || 0, label: n.kind === 'hit' && n.rank ? `#${n.rank} ${n.text}` : n.text, text: n.text, note: n.note, step: n.step === Infinity ? 0 : n.step } };
+  });
   const edgeList = [...edges.values()].filter((e) => nodes.has(e.data.source) && nodes.has(e.data.target));
   const ends = {};
   nodes.forEach((n) => { if (n.text) ends[n.id] = { id: n.id, summary: n.text }; });
@@ -477,6 +510,77 @@ export function trailPicture(trail, { uptoStep = Infinity } = {}) {
   const counts = {};
   nodes.forEach((n) => n.roles.forEach((r) => { counts[r] = (counts[r] || 0) + 1; }));
   return { nodes: nodeList, edges: edgeList, ends, cited, stats: { nodes: nodeList.length, edges: edgeList.length, counts } };
+}
+
+/** How the answer's cited entries were reached (live or replayed trail):
+    {rows: [{id, roles, trace, via, how, walkedOnly, searched, read, title}],
+     totals: {cited, searched, walkedOnly, readThenCited, unseen}}.
+    walkedOnly = reached by a graph walk and never returned by a search nor
+    read in full: the entries the model had to walk to. */
+export function citationProvenance(trail, pic = null) {
+  const picture = pic || trailPicture(trail);
+  const byId = new Map(picture.nodes.map((n) => [n.data.id, n.data]));
+  const rows = (picture.cited || []).filter((id) => byId.has(id)).map((id) => {
+    const d = byId.get(id);
+    const roles = (d.roles || []).filter((r) => r !== 'cited');
+    const has = (r) => roles.includes(r);
+    const trace = d.trace || [];
+    // read in full = a read / entry / playbook call, not merely being the root a walk started from
+    const readFull = trace.some((t) => t.role === 'read' && !t.walkRoot);
+    const walkedOnly = has('walk') && !has('hit') && !has('read');
+    const via = walkedOnly ? trace.find((t) => t.role === 'walk') : d.via;
+    const first = ROLE_WORD[via && via.role] || roles[0];
+    const how = !roles.length ? 'unseen' : walkedOnly ? 'walked' : (readFull && via && via.role !== 'read' ? `${first}, then read` : first);
+    const later = readFull && via && via.role !== 'read' ? trace.find((t) => t.role === 'read' && !t.walkRoot) : null;
+    return { id, roles, trace, via: via || null, how, walkedOnly, searched: has('hit'), read: readFull, title: `cited · ${via ? traceLine(via) : 'never surfaced by a tool call'}${later ? `; then ${traceLine(later)}` : ''}` };
+  });
+  const totals = { cited: rows.length, searched: rows.filter((r) => r.searched).length, walkedOnly: rows.filter((r) => r.walkedOnly).length, readThenCited: rows.filter((r) => r.read).length, unseen: rows.filter((r) => r.how === 'unseen').length };
+  return { rows, totals };
+}
+
+/** "4 cited · 2 from a search · 1 reached only by walking · 1 read in full" ('' when nothing is cited). */
+export function provenanceLine(prov) {
+  const t = prov && prov.totals;
+  if (!t || !t.cited) return '';
+  const parts = [`${t.cited} cited`];
+  if (t.searched) parts.push(`${t.searched} from a search`);
+  if (t.walkedOnly) parts.push(`${t.walkedOnly} reached only by walking`);
+  if (t.readThenCited) parts.push(`${t.readThenCited} read in full`);
+  if (t.unseen) parts.push(`${t.unseen} never surfaced by a tool`);
+  return parts.join(' · ');
+}
+
+/** "1,234 in / 56 out tokens" for a step's (or run's) usage; '' without one. */
+export function usageText(usage) {
+  if (!usage || !(usage.input_tokens || usage.output_tokens)) return '';
+  const cached = Number((usage.input_tokens_details && usage.input_tokens_details.cached_tokens) || usage.cached_tokens || 0);
+  const reasoning = Number((usage.output_tokens_details && usage.output_tokens_details.reasoning_tokens) || usage.reasoning_tokens || 0);
+  return `${Number(usage.input_tokens || 0).toLocaleString()} in${cached ? ` (${cached.toLocaleString()} cached)` : ''} / ${Number(usage.output_tokens || 0).toLocaleString()} out${reasoning ? ` (${reasoning.toLocaleString()} reasoning)` : ''} tokens`;
+}
+
+/** Everything one tool call's detail panel shows: the arguments as sent, the
+    duration, a one-line count of what came back, and both raw JSON texts. */
+export function callDetail(c) {
+  const out = c && c.output;
+  const kind = toolKind(c && c.call && c.call.name);
+  let counts = '';
+  if (out && c.state === 'done') {
+    if (kind === 'search') { const rs = searchRows(out); const ptrs = rs.reduce((n, r) => n + r.related.length, 0); counts = `${rs.length} result${rs.length === 1 ? '' : 's'}${ptrs ? ` · ${ptrs} pointer${ptrs === 1 ? '' : 's'}` : ''}`; }
+    else if (kind === 'read') { const e = readEntry(out); counts = e ? `1 entry · ${e.connections.length} connection${e.connections.length === 1 ? '' : 's'}` : ''; }
+    else if (kind === 'playbook') { const pb = playbookRead(out); counts = pb ? `${pb.steps.length} step${pb.steps.length === 1 ? '' : 's'} · ${pb.entries.length} cited entr${pb.entries.length === 1 ? 'y' : 'ies'}` : ''; }
+    else if (kind === 'walk') { const w = walkRead(out); counts = `${w.nodes.length} node${w.nodes.length === 1 ? '' : 's'} · ${w.edges.length} edge${w.edges.length === 1 ? '' : 's'}${w.truncated ? ' · truncated' : ''}`; }
+  }
+  let rawOut = '';
+  if (c && c.state === 'error') rawOut = JSON.stringify({ error: c.error }, null, 2);
+  else if (out !== null && out !== undefined) rawOut = typeof out === 'string' ? out : JSON.stringify(out, null, 2);
+  return { tool: (c && c.call && c.call.name) || '', kind, callId: (c && c.call && c.call.call_id) || '', args: (c && c.call && c.call.arguments) || {}, rawIn: JSON.stringify((c && c.call && c.call.arguments) || {}, null, 2), rawOut, durationMs: c && Number.isFinite(Number(c.durationMs)) && c.durationMs !== null ? Math.round(c.durationMs) : null, counts };
+}
+
+/** Walk nodes grouped by depth, nearest first: [{depth, nodes}]. */
+export function walkByDepth(w) {
+  const groups = new Map();
+  ((w && w.nodes) || []).forEach((n) => { const d = Number(n.depth) || 0; if (!groups.has(d)) groups.set(d, []); groups.get(d).push(n); });
+  return [...groups.entries()].sort((a, b) => a[0] - b[0]).map(([depth, nodes]) => ({ depth, nodes }));
 }
 
 /** Split an answer into text and citation segments: `[4+ char prefix]`, bare
@@ -543,6 +647,10 @@ export function trailSummary(trail) {
   if (counts.playbook) parts.push(`${counts.playbook} playbook${counts.playbook === 1 ? '' : 's'} read`);
   if (counts.walk) parts.push(`${counts.walk} walk${counts.walk === 1 ? '' : 's'}`);
   if (counts.other) parts.push(`${counts.other} other tool call${counts.other === 1 ? '' : 's'}`);
+  if ((trail.citations || []).length && trail.steps.some((s) => s.status === 'answered' || s.status === 'step_limit')) {
+    const t = citationProvenance(trail).totals;
+    if (t.cited) parts.push(`${t.cited} cited${t.walkedOnly ? ` (${t.walkedOnly} reached only by walking)` : ''}`);
+  }
   if (trail.usage && (trail.usage.input_tokens || trail.usage.output_tokens)) parts.push(`${Number(trail.usage.input_tokens || 0).toLocaleString()} in / ${Number(trail.usage.output_tokens || 0).toLocaleString()} out tokens`);
   return parts.join(' · ');
 }

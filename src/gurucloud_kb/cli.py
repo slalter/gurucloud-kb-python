@@ -4,6 +4,11 @@ Today one subcommand::
 
     gurucloud-kb ui [--kb ID_OR_NAME] [--api-key KEY] [--base-url URL]
                     [--host 127.0.0.1] [--port 8765] [--no-browser] [--allow-insecure]
+                    [--agents REGISTRY.json]
+
+``--agents`` loads an agent/bank registry (see :mod:`gurucloud_kb.agents.registry`)
+and serves the Agents view at ``/agents``; overrides made there live in memory
+for the life of the server.
 
 The key comes from ``--api-key`` or the ``GURUCLOUD_KB_API_KEY`` environment
 variable; the base URL from ``--base-url`` or ``GURUCLOUD_KB_BASE_URL`` (default:
@@ -15,9 +20,12 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from typing import Optional, Sequence
+from typing import TYPE_CHECKING, Optional, Sequence
 
 from gurucloud_kb.client import _DEFAULT_BASE_URL, GuruCloudClient
+
+if TYPE_CHECKING:  # pragma: no cover
+    from gurucloud_kb.agents.service import AgentTopologyService
 
 ENV_API_KEY = "GURUCLOUD_KB_API_KEY"
 ENV_BASE_URL = "GURUCLOUD_KB_BASE_URL"
@@ -35,6 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
     ui.add_argument("--port", type=int, default=8765, help="Port (default 8765; 0 = any free port).")
     ui.add_argument("--no-browser", action="store_true", help="Do not open a browser tab.")
     ui.add_argument("--allow-insecure", action="store_true", help="Allow an http:// base URL (local development only).")
+    ui.add_argument("--agents", metavar="FILE", help="Agent/bank registry JSON: also serve the Agents view at /agents.")
     return parser
 
 
@@ -48,6 +57,17 @@ def resolve_credentials(args: argparse.Namespace, environ: Optional[dict[str, st
     return api_key, base_url
 
 
+def load_agents_service(path: str) -> "AgentTopologyService":
+    """An in-memory :class:`AgentTopologyService` over a registry file; exit 2 when it is invalid."""
+    from gurucloud_kb.agents import AgentTopologyService, ContractError, InMemoryBindingStore, load_registry
+
+    try:
+        reg = load_registry(path)
+    except (OSError, ContractError) as exc:
+        raise SystemExit(f"error: cannot load agent registry {path!r}: {exc}") from exc
+    return AgentTopologyService(reg.agents, reg.banks, InMemoryBindingStore(reg.overrides))
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -56,7 +76,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         client = GuruCloudClient(api_key, base_url=base_url, allow_insecure=args.allow_insecure)
         from gurucloud_kb.ui_server import serve_ui
 
-        serve_ui(client, args.kb, host=args.host, port=args.port, open_browser=not args.no_browser)
+        agents = load_agents_service(args.agents) if args.agents else None
+        serve_ui(client, args.kb, host=args.host, port=args.port, open_browser=not args.no_browser, agents=agents)
         return 0
     parser.error(f"unknown command {args.command!r}")  # pragma: no cover - argparse exits first
     return 2

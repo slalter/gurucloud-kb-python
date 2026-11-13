@@ -213,7 +213,14 @@ class Ledger:
     def decide_crawl_item(self, run_id: int, path: str, status: str, *, purity: Optional[str] = None, kb_entry_id: Optional[str] = None, duplicate_of: Optional[str] = None, reason: Optional[str] = None, kb_id_pending: bool = False) -> None:
         """``kb_id_pending`` marks ``kb_entry_id`` as a report_learning pending
         id that may never materialize; it applies only when an id is passed
-        (a decide without ``kb_entry_id`` keeps both the id and its flag)."""
+        (a decide without ``kb_entry_id`` keeps both the id and its flag).
+
+        An omitted ``reason`` keeps the stored one, like ``purity`` and
+        ``kb_entry_id``: a re-verify of a re-opened row (status ``pending``
+        until decided again) passes no ``--reason`` and must not wipe it.
+        ``duplicate_of`` is set only on a ``duplicate_of`` decision (omitted
+        there, the stored target is kept) and cleared by any other decision
+        (kanban 46252b79)."""
         if status not in {"cataloged", "not_a_module", "duplicate_of", "retired"}:
             raise ValueError(f"invalid decision {status!r}")
         if kb_id_pending and not kb_entry_id:
@@ -221,8 +228,10 @@ class Ledger:
         with self.conn.cursor() as cur:
             cur.execute(
                 "UPDATE crawl_items SET status = %s, purity = COALESCE(%s, purity), kb_entry_id = COALESCE(%s, kb_entry_id), "
-                "kb_id_pending = CASE WHEN %s THEN %s ELSE kb_id_pending END, duplicate_of = %s, reason = %s, decided_in_run = %s, decided_at = now(), updated_at = now() WHERE path = %s",
-                (status, purity, kb_entry_id, kb_entry_id is not None, kb_id_pending, duplicate_of, reason, run_id, path),
+                "kb_id_pending = CASE WHEN %s THEN %s ELSE kb_id_pending END, "
+                "duplicate_of = CASE WHEN %s THEN COALESCE(%s, duplicate_of) END, reason = COALESCE(%s, reason), "
+                "decided_in_run = %s, decided_at = now(), updated_at = now() WHERE path = %s",
+                (status, purity, kb_entry_id, kb_entry_id is not None, kb_id_pending, status == "duplicate_of", duplicate_of, reason, run_id, path),
             )
             if cur.rowcount == 0:
                 raise KeyError(path)

@@ -25,13 +25,15 @@ import { RELATION_COLORS, fitPlan, labelFor, neighbourhood, pointerLine, scene }
 import { GRAPH_COLORS, ensureForceGraph3D, fitLit, flyTo, loadBankEdges } from './graph3d.js';
 import { showsModelKnobs } from './mode_model.js';
 import {
-  REASONING, TOOLS, addStep, applyExecuteOutputs, callArgText, citationSegments, continueBody, emptyTrail, entryOutput, executeBody, isEntryId,
+  REASONING, TOOLS, addStep, applyExecuteOutputs, callArgText, callDetail, citationProvenance, citationSegments, continueBody, emptyTrail, entryOutput, executeBody, isEntryId,
   isLegacyTool, matchedPlaybooks, mountLine, mountTools, normalizeAskOptions, outputsOf, pendingStep, playbookRead, readEntry, readRequest,
   searchOutput, searchRequest, searchRows, setCallResult, settingsKey, startBody, stepCaption, stepFailure, toolKind, trailFromRunDetail,
-  trailKnownRefs, trailPicture, trailSummary, walkOutput, walkRead, walkRequest,
+  provenanceLine, traceLine, trailKnownRefs, trailPicture, trailSummary, usageText, walkByDepth, walkOutput, walkRead, walkRequest,
 } from './ask_model.js';
 
 const KIND_LABEL = { hit: 'retrieved', folded: 'pointer (folded)', neighbor: 'one hop away', read: 'read in full', walk: 'walked', cited: 'cited in the answer', ctx: 'other connection', bank: '' };
+const WALK_NODES_SHOWN = 24; // rows a walk shows before "Show all"
+const WALK_EDGES_SHOWN = 40;
 const CONTINUE_DELAY_MS = 450; // long enough to see a round of results land before the next turn
 
 export function createAskView(ctx) {
@@ -313,18 +315,26 @@ export function createAskView(ctx) {
   function renderStep(st) {
     const isFocus = focusStep === st.no;
     const head = h('div', { class: 'kbx-ask-step-head', title: 'Show the bank as it looked after this step', onClick: () => { focusStep = isFocus ? null : st.no; renderTimeline(); paint().then(() => fitLit(fg)); } },
-      h('span', { class: `kbx-chip ${isFocus ? '' : 'muted'}` }, `Step ${st.no}`), h('span', { class: 'kbx-muted' }, stepCaption(st).replace(/^Step \d+ · ?/, '')));
+      h('span', { class: `kbx-chip ${isFocus ? '' : 'muted'}` }, `Step ${st.no}`), h('span', { class: 'kbx-muted' }, stepCaption(st).replace(/^Step \d+ · ?/, '')),
+      usageText(st.usage) ? h('span', { class: 'kbx-muted kbx-ask-usage', dataset: { role: 'ask-step-usage' } }, usageText(st.usage)) : null);
     const parts = [head];
     st.thinking.forEach((t) => parts.push(h('div', { class: 'kbx-ask-think' }, h('i', { class: 'bi bi-chat-left-dots' }), ' ', t)));
     st.calls.forEach((c) => parts.push(renderCall(c)));
     if (st.answer) {
       const refs = trailKnownRefs(trail);
       const segs = citationSegments(st.answer, trail.citations, [...Object.keys(bankEnds), ...refs.ids], refs.slugs);
+      // How the model reached each cited entry (searched / walked / read), from the trail itself (kanban 3f60a3d3).
+      const prov = citationProvenance(trail);
+      const provBy = new Map(prov.rows.map((r) => [r.id, r]));
       parts.push(h('div', { class: 'kbx-ask-answer', dataset: { role: 'ask-answer' } }, ...segs.map((s) => {
         if (!s.cite) return document.createTextNode(s.text);
         if (s.slug) return h('span', { class: 'kbx-cite', title: `playbook ${s.cite} (see the Playbooks tab)`, dataset: { role: 'ask-cite', slug: s.cite, action: 'ask_cite_playbook', targetSlug: s.cite }, onClick: (e) => { e.stopPropagation(); toast(`Playbook ${s.cite}: open it on the Playbooks tab.`, 'info'); } }, s.label);
-        return h('span', { class: 'kbx-cite', title: s.cite, dataset: { role: 'ask-cite', entryId: s.cite, action: 'ask_cite_open', targetEntryId: s.cite }, onClick: (e) => { e.stopPropagation(); focusId(s.cite); } }, s.label);
+        const p = provBy.get(s.cite);
+        return h('span', { class: `kbx-cite${p && p.walkedOnly ? ' is-walked' : ''}`, title: `${s.cite}\n${p ? p.title : 'cited'}`, dataset: { role: 'ask-cite', entryId: s.cite, action: 'ask_cite_open', targetEntryId: s.cite, via: p ? p.how : 'unseen', walkedOnly: p && p.walkedOnly ? 'true' : 'false' }, onClick: (e) => { e.stopPropagation(); focusId(s.cite); } },
+          s.label, h('span', { class: 'kbx-cite-via' }, ` · ${p ? p.how : 'unseen'}`));
       })));
+      const line = provenanceLine(prov);
+      if (line) parts.push(h('div', { class: 'kbx-muted kbx-ask-provenance', dataset: { role: 'ask-provenance' }, title: prov.rows.map((r) => `${String(r.id).slice(0, 8)}: ${r.title}`).join('\n') }, line));
       if (st.status === 'step_limit') parts.push(h('div', { class: 'kbx-muted', style: { fontSize: '12px', marginTop: '4px' } }, 'The model reached its step limit and was told to answer with what it had.'));
     }
     if (st.error) parts.push(h('div', { class: 'kbx-alert danger', style: { marginTop: '6px' } }, st.error));
@@ -345,7 +355,36 @@ export function createAskView(ctx) {
     const body = [];
     if (c.state === 'error') body.push(h('div', { class: 'kbx-ask-row error' }, c.error || 'failed'));
     else if (c.state === 'done' && c.output) body.push(...renderOutput(c.call.name, c.output));
+    if (c.state === 'done' || c.state === 'error') body.push(callDetailToggle(c));
     return h('div', { class: `kbx-ask-tool state-${c.state}`, dataset: { role: 'ask-tool', tool: c.call.name, state: c.state } }, h('div', { class: 'kbx-ask-tool-head' }, ...headParts), body.length ? h('div', { class: 'kbx-ask-result' }, ...body) : null);
+  }
+
+  /** One call in full: the arguments as sent, timing, what came back, and the raw JSON both ways. */
+  function callDetailToggle(c) {
+    const d = callDetail(c);
+    const argRows = Object.entries(d.args).map(([k, v]) => h('div', { class: 'kbx-ask-kv' }, h('span', { class: 'kbx-mono kbx-muted' }, k), h('span', { class: 'kbx-mono' }, typeof v === 'string' ? v : JSON.stringify(v))));
+    const rawIn = h('pre', { class: 'kbx-graph-raw', dataset: { role: 'ask-call-raw-in' } }, d.rawIn);
+    const rawOut = h('pre', { class: 'kbx-graph-raw', dataset: { role: 'ask-call-raw-out' } }, d.rawOut || '(no output)');
+    const panel = h('div', { class: 'kbx-ask-detail', style: { display: 'none' }, dataset: { role: 'ask-call-detail' } },
+      h('div', { class: 'kbx-ask-kv' }, h('span', { class: 'kbx-muted' }, 'tool'), h('span', { class: 'kbx-mono' }, d.tool)),
+      h('div', { class: 'kbx-ask-kv' }, h('span', { class: 'kbx-muted' }, 'call id'), h('span', { class: 'kbx-mono' }, d.callId || '?')),
+      d.durationMs !== null ? h('div', { class: 'kbx-ask-kv' }, h('span', { class: 'kbx-muted' }, 'took'), h('span', {}, `${d.durationMs} ms`)) : null,
+      d.counts ? h('div', { class: 'kbx-ask-kv' }, h('span', { class: 'kbx-muted' }, 'returned'), h('span', { dataset: { role: 'ask-call-counts' } }, d.counts)) : null,
+      h('div', { class: 'kbx-side-title', style: { marginTop: '6px' } }, 'Arguments as sent'),
+      argRows.length ? h('div', {}, ...argRows) : h('div', { class: 'kbx-muted', style: { fontSize: '11px' } }, 'none'),
+      h('div', { class: 'kbx-side-title', style: { marginTop: '6px' } }, 'Raw in'), rawIn,
+      h('div', { class: 'kbx-side-title', style: { marginTop: '6px' } }, 'Raw out'), rawOut);
+    const btn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { role: 'ask-call-detail-toggle', action: 'ask_call_detail_toggle', targetCallId: d.callId }, onClick: (e) => { e.stopPropagation(); const on = panel.style.display === 'none'; panel.style.display = on ? 'block' : 'none'; btn.textContent = on ? 'Hide call details' : 'Call details'; } }, 'Call details');
+    return h('div', {}, btn, panel);
+  }
+
+  /** A list that shows `n` rows and a "Show all" button for the rest. */
+  function capped(rowsEl, n, label) {
+    if (rowsEl.length <= n) return rowsEl;
+    const rest = rowsEl.slice(n);
+    rest.forEach((r) => { r.style.display = 'none'; });
+    const btn = h('button', { class: 'kbx-btn kbx-btn-ghost kbx-btn-sm', type: 'button', dataset: { role: 'ask-show-all', action: 'ask_show_all' }, onClick: (e) => { e.stopPropagation(); rest.forEach((r) => { r.style.display = ''; }); btn.remove(); } }, `Show all ${rowsEl.length} ${label}`);
+    return [...rowsEl, btn];
   }
 
   function row(id, cls, text, extra) {
@@ -360,7 +399,7 @@ export function createAskView(ctx) {
   function renderOutput(name, out) {
     const kind = toolKind(name);
     if (kind === 'search') {
-      const rows = searchRows(out).map((r) => row(r.id, 'hit', `#${r.rank} ${r.text || String(r.id).slice(0, 8)}`,
+      const rows = searchRows(out).map((r) => row(r.id, 'hit', `#${r.rank}${r.score !== null ? ` (${r.score.toFixed(3)})` : ''} ${r.text || String(r.id).slice(0, 8)}`,
         r.related.length ? h('div', { class: 'kbx-graph-ptrs', style: { marginTop: '4px' } }, ...r.related.filter((p) => p && p.id).map((p) => h('div', { class: `kbx-ptr ${p.kind === 'neighbor' ? 'neighbor' : 'folded'}`, title: p.id, dataset: { entryId: p.id }, onClick: (e) => { e.stopPropagation(); focusId(p.id); } }, pointerLine(p)))) : null));
       const playbooks = matchedPlaybooks(out);
       if (!rows.length && !playbooks.length) rows.push(h('div', { class: 'kbx-hint' }, 'No results.'));
@@ -389,8 +428,11 @@ export function createAskView(ctx) {
     if (kind === 'walk') {
       const w = walkRead(out);
       const rows = [h('div', { class: 'kbx-muted', style: { fontSize: '11px' } }, `${w.nodes.length} entr${w.nodes.length === 1 ? 'y' : 'ies'} within ${w.depth} hop${w.depth === 1 ? '' : 's'} · ${w.edges.length} edge${w.edges.length === 1 ? '' : 's'}${w.truncated ? ' · cut short by the node cap' : ''}`)];
-      w.nodes.filter((n) => n.depth > 0).slice(0, 24).forEach((n) => rows.push(row(n.id, 'walk', `${n.depth} hop${n.depth === 1 ? '' : 's'} · ${n.text || ''}`)));
-      w.edges.slice(0, 40).forEach((e) => rows.push(h('div', { class: 'kbx-ptr muted' }, `${String(e.from || '').slice(0, 8)} ${String(e.relation || '').replace(/_/g, ' ')} → ${String(e.to || '').slice(0, 8)}${e.note ? ` — ${e.note}` : ''}`)));
+      const nodeRows = [];
+      walkByDepth(w).filter((g) => g.depth > 0).forEach((g) => g.nodes.forEach((n) => nodeRows.push(row(n.id, 'walk', `${n.depth} hop${n.depth === 1 ? '' : 's'} · ${n.text || ''}`))));
+      rows.push(...capped(nodeRows, WALK_NODES_SHOWN, 'entries'));
+      const edgeRows = w.edges.map((e) => h('div', { class: 'kbx-ptr muted', dataset: { role: 'ask-walk-edge' } }, `${String(e.from || '').slice(0, 8)} ${String(e.relation || '').replace(/_/g, ' ')} → ${String(e.to || '').slice(0, 8)}${e.note ? ` — ${e.note}` : ''}`));
+      rows.push(...capped(edgeRows, WALK_EDGES_SHOWN, 'edges'));
       return rows;
     }
     const playbooks = matchedPlaybooks(out);
@@ -408,7 +450,9 @@ export function createAskView(ctx) {
     const parts = [];
     if (n.kind === 'hit') parts.push(`<b>retrieved #${n.rank}</b>`);
     else if (KIND_LABEL[n.kind]) parts.push(`<b>${KIND_LABEL[n.kind]}</b>`);
-    if (n.step) parts.push(`<span style="opacity:.75">step ${n.step}</span>`);
+    // every role the entry played, with the step it first played it (not only the colour that won)
+    if (n.trace && n.trace.length) n.trace.forEach((t) => parts.push(`<span style="opacity:.8">${esc(traceLine(t))}</span>`));
+    else if (n.step) parts.push(`<span style="opacity:.75">step ${n.step}</span>`);
     parts.push(esc(n.text || labelFor(bankEnds[n.id]) || String(n.id).slice(0, 8)));
     if (n.note) parts.push(`<i>${esc(n.note)}</i>`);
     return `<div class="kbx kbx-graph-tip">${parts.join('<br>')}</div>`;
@@ -425,7 +469,11 @@ export function createAskView(ctx) {
     const pic = trail.steps.length ? trailPicture(trail, { uptoStep: focusStep === null ? Infinity : focusStep }) : null;
     if (pic) Object.entries(pic.ends).forEach(([id, end]) => { if (!bankEnds[id]) bankEnds[id] = end; });
     const sc = scene(bankEdges, pic && pic.nodes.length ? pic : null, { focus: o.focus, hideBackfill: o.hideBackfill });
-    sc.nodes.forEach((n) => { if (!n.text && bankEnds[n.id]) n.text = labelFor(bankEnds[n.id]); });
+    sc.nodes.forEach((n) => {
+      if (!n.text && bankEnds[n.id]) n.text = labelFor(bankEnds[n.id]);
+      // a focused step: what it brought in for the first time is drawn larger than what earlier steps had already lit
+      if (focusStep !== null && n.lit && n.trace && n.trace.length && Math.min(...n.trace.map((t) => t.step || Infinity)) === focusStep) n.val *= 1.8;
+    });
     if (!sc.nodes.length) {
       fg.graphData({ nodes: [], links: [] });
       caption.textContent = 'nothing to draw yet';
@@ -461,6 +509,7 @@ export function createAskView(ctx) {
     const links = fg ? fg.graphData().links.filter((l) => (l.source.id || l.source) === n.id || (l.target.id || l.target) === n.id) : [];
     mount(selectedHost,
       h('div', { class: 'kbx-row', style: { gap: '6px', alignItems: 'center' } }, h('span', { class: `kbx-chip ${n.kind === 'bank' ? 'muted' : ''}` }, n.kind === 'hit' ? `retrieved #${n.rank}` : KIND_LABEL[n.kind] || 'in the bank'), h('span', { class: 'kbx-mono kbx-muted', style: { fontSize: '11px' } }, String(n.id).slice(0, 8))),
+      n.trace && n.trace.length ? h('div', { class: 'kbx-graph-ptrs', style: { marginTop: '6px' }, dataset: { role: 'ask-selected-trace' } }, ...n.trace.map((t) => h('div', { class: `kbx-ptr ${t.role === 'walk' ? 'walk' : 'muted'}`, dataset: { role: t.role } }, traceLine(t)))) : null,
       h('div', { class: 'kbx-graph-selected-text' }, labelFor(entry)),
       entry.useful_for && labelFor(entry) !== entry.useful_for ? h('div', { class: 'kbx-muted', style: { fontSize: '12px', marginTop: '4px' } }, entry.useful_for) : null,
       h('div', { class: 'kbx-row', style: { gap: '6px', marginTop: '8px' } },

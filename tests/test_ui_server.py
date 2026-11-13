@@ -23,6 +23,7 @@ from gurucloud_kb.ui_server import (
     EXPLORER_PREFIX,
     ExplorerProxy,
     Translation,
+    render_agents_page,
     render_index,
     translate,
     ui_dir,
@@ -154,12 +155,21 @@ def test_render_index_fills_placeholders():
     assert f'data-stats-url="{STATS_PATH}"' in html
     assert "data-token-gate" not in html and "{{" not in html
     assert 'data-token-gate="1"' in render_index(mode="platform", token_gate=True)
+    assert "data-agents-url" not in html
+    assert 'data-agents-url="/agents"' in render_index(mode="sdk", agents_url="/agents")
+
+
+def test_render_agents_page_fills_placeholders_and_escapes():
+    html = render_agents_page(topology_url="/x/api/agent-topology", explorer_url='/kb?a=1&b="2"', token_gate=True)
+    assert 'data-topology-url="/x/api/agent-topology"' in html
+    assert 'data-explorer-url="/kb?a=1&amp;b=&quot;2&quot;"' in html
+    assert 'data-token-gate="1"' in html and "{{" not in html
 
 
 def test_bundle_is_complete():
     d = ui_dir()
     for rel in ("index.html", "kb-explorer.css", "js/main.js", "js/host.js", "js/map.js", "js/map_layout.js", "js/playbook_graph.js", "js/playbook_runs.js",
-                "vendor/cytoscape.min.js", "vendor/dagre.min.js", "vendor/cytoscape-dagre.js",
+                "agents.html", "js/agents.js", "js/agents_model.js", "vendor/cytoscape.min.js", "vendor/dagre.min.js", "vendor/cytoscape-dagre.js",
                 "vendor/bootstrap-icons.min.css", "vendor/fonts/bootstrap-icons.woff2"):
         assert (d / rel).is_file(), rel
 
@@ -245,3 +255,70 @@ def test_translate_routes_expanded_search_to_the_sdk_contract() -> None:
 
     t = translate("POST", "Games", "/search/expanded")
     assert (t.method, t.path) == ("POST", "/banks/Games/search/expanded")
+
+
+
+# ─────────────────────────────────────────────────────────── agents view
+
+
+def _send(method: str, url: str, body=None):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status, json.loads(resp.read())
+    except HTTPError as e:
+        return e.code, json.loads(e.read())
+
+
+@pytest.fixture
+def agents_server():
+    from gurucloud_kb.agents import AgentSpec, AgentTopologyService, BankRef, Binding, InMemoryBindingStore
+
+    service = AgentTopologyService(
+        [AgentSpec("triage", "Triage", baseline=(Binding("triage", "ops", "read"),))],
+        [BankRef("ops", "Ops", "https://kb.example/ops/mcp")],
+        InMemoryBindingStore(),
+    )
+    client = GuruCloudClient(API_KEY, base_url=BASE_URL)
+    srv = start_ui_server(client, port=0, agents=service, actor="tester").start()
+    try:
+        yield srv, service
+    finally:
+        srv.stop()
+
+
+def test_agents_page_and_picker_link(agents_server):
+    srv, _ = agents_server
+    base = f"http://127.0.0.1:{srv.port}"
+    status, headers, body = _get(f"{base}/agents")
+    assert status == 200 and headers["Content-Type"].startswith("text/html")
+    assert b'id="kbx-agents-root"' in body and b'data-topology-url="/api/agent-topology"' in body
+    status, _, body = _get(f"{base}/")
+    assert b'data-agents-url="/agents"' in body
+
+
+def test_agents_routes_over_http_record_the_server_actor(agents_server):
+    srv, service = agents_server
+    base = f"http://127.0.0.1:{srv.port}/api/agent-topology"
+    status, topo = _send("GET", base)
+    assert status == 200 and topo["plans"]["triage"]["mcp_servers"]["ops"]["url"] == "https://kb.example/ops/mcp"
+    status, body = _send("PUT", f"{base}/overrides", {"agent_id": "triage", "bank_id": "ops", "access": "removed", "reason": "pause"})
+    assert status == 200 and body["result"] == "set" and body["event"]["actor"] == "tester"
+    assert service.mount_plan("triage").mcp_servers == {}
+    status, body = _send("DELETE", f"{base}/overrides/triage/ops?reason=resume")
+    assert status == 200 and body["result"] == "clear"
+    status, body = _send("GET", f"{base}/events")
+    assert [(e["action"], e["reason"]) for e in body["events"]] == [("clear", "resume"), ("set", "pause")]
+    status, body = _send("PUT", f"{base}/overrides", {"agent_id": "triage", "bank_id": "ops", "access": "god"})
+    assert status == 400 and "access" in body["error"]
+
+
+def test_agents_routes_404_without_a_service(server):
+    base = f"http://127.0.0.1:{server.port}"
+    status, body = _send("GET", f"{base}/api/agent-topology")
+    assert status == 404 and "not configured" in body["error"]
+    status, _, _ = _get(f"{base}/agents")
+    assert status == 404
+    status, _, body = _get(f"{base}/")
+    assert b"data-agents-url" not in body

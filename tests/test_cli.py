@@ -35,15 +35,53 @@ def test_missing_key_is_a_usage_error():
 def test_main_serves_with_resolved_client(monkeypatch):
     seen = {}
 
-    def fake_serve(client, kb, *, host, port, open_browser):
-        seen.update(kb=kb, host=host, port=port, open_browser=open_browser, base=client._http._base_url)
+    def fake_serve(client, kb, *, host, port, open_browser, agents):
+        seen.update(kb=kb, host=host, port=port, open_browser=open_browser, base=client._http._base_url, agents=agents)
 
     monkeypatch.setattr("gurucloud_kb.ui_server.serve_ui", fake_serve)
     rc = cli.main(["ui", "--kb", "My KB", "--api-key", "kb_x", "--base-url", "https://p.example", "--port", "0", "--no-browser"])
     assert rc == 0
-    assert seen == {"kb": "My KB", "host": "127.0.0.1", "port": 0, "open_browser": False, "base": "https://p.example"}
+    assert seen == {"kb": "My KB", "host": "127.0.0.1", "port": 0, "open_browser": False, "base": "https://p.example", "agents": None}
 
 
 def test_insecure_base_url_needs_flag():
     with pytest.raises(ValueError):
         cli.main(["ui", "--api-key", "tok", "--base-url", "http://localhost:8006", "--no-browser"])
+
+
+REGISTRY = {
+    "v": 1,
+    "banks": [{"bank_id": "ops", "name": "Ops", "mcp_url": "https://kb.example/ops/mcp"}],
+    "agents": [{"agent_id": "triage", "name": "Triage", "baseline": [{"bank_id": "ops", "access": "read"}]}],
+}
+
+
+def test_main_agents_flag_serves_the_registry(monkeypatch, tmp_path):
+    import json
+
+    path = tmp_path / "agents.json"
+    path.write_text(json.dumps(REGISTRY))
+    seen = {}
+
+    def fake_serve(client, kb, *, host, port, open_browser, agents):
+        seen["agents"] = agents
+
+    monkeypatch.setattr("gurucloud_kb.ui_server.serve_ui", fake_serve)
+    assert cli.main(["ui", "--api-key", "kb_x", "--no-browser", "--agents", str(path)]) == 0
+    service = seen["agents"]
+    assert set(service.agents) == {"triage"} and set(service.banks) == {"ops"}
+    assert service.mount_plan("triage").mcp_servers == {"ops": {"type": "http", "url": "https://kb.example/ops/mcp"}}
+
+
+def test_main_agents_flag_rejects_a_bad_registry(tmp_path):
+    path = tmp_path / "agents.json"
+    path.write_text('{"v": 1, "agents": [{"agent_id": "a", "name": "A", "parent_id": "ghost"}]}')
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["ui", "--api-key", "kb_x", "--no-browser", "--agents", str(path)])
+    assert "ghost" in str(exc.value)
+
+
+def test_main_agents_flag_rejects_a_missing_file(tmp_path):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["ui", "--api-key", "kb_x", "--no-browser", "--agents", str(tmp_path / "nope.json")])
+    assert "cannot load agent registry" in str(exc.value)

@@ -72,6 +72,7 @@ export function renderPicker(root, feeds, opts = {}) {
   const planHost = h('span', {});
   const actions = h('div', { class: 'kbx-header-actions' },
     planHost,
+    opts.agentsUrl ? h('a', { class: 'kbx-btn kbx-btn-ghost', href: opts.agentsUrl, dataset: { action: 'agents_open' } }, h('i', { class: 'bi bi-diagram-3' }), 'Agents') : null,
     opts.apiKeysUrl ? h('a', { class: 'kbx-btn kbx-btn-ghost', href: opts.apiKeysUrl }, h('i', { class: 'bi bi-key' }), 'API keys') : null,
     opts.createUrl ? h('a', { class: 'kbx-btn kbx-btn-primary', href: opts.createUrl }, h('i', { class: 'bi bi-plus-lg' }), 'Create bank') : null);
   const header = h('div', { class: 'kbx-header' },
@@ -290,6 +291,7 @@ export async function pickBank(root, { headers = {}, onUnauthorized = null } = {
     headers,
     createUrl: d.createUrl || null,
     apiKeysUrl: d.apiKeysUrl || null,
+    agentsUrl: d.agentsUrl || null,
     tierUrl: d.tierUrl || null,
     billingUrl: d.billingUrl || null,
     reload: () => pickBank(root, { headers, onUnauthorized }),

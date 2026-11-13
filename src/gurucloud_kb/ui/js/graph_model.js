@@ -352,7 +352,8 @@ export function scene(bankEdges, answer, { focus = 'shrink', hideBackfill = true
     (answer.nodes || []).forEach((n) => {
       const kind = n.data.kind === 'hit' ? 'hit' : n.data.kind;
       const cur = nodes.get(n.data.id) || { id: n.data.id, degree: 0 };
-      nodes.set(n.data.id, { ...cur, kind, lit: kind !== 'ctx', rank: n.data.rank || 0, label: n.data.label || '', text: n.data.text || '', note: n.data.note || '', added: !degree.has(n.data.id) });
+      // origin/roles/trace/step: how the Ask tab's model reached the node (ask_model.trailPicture); empty for other answers.
+      nodes.set(n.data.id, { ...cur, kind, lit: kind !== 'ctx', rank: n.data.rank || 0, label: n.data.label || '', text: n.data.text || '', note: n.data.note || '', added: !degree.has(n.data.id), origin: n.data.origin || null, roles: n.data.roles || [], trace: n.data.trace || [], step: n.data.step || 0 });
       if (kind !== 'ctx') litIds.add(n.data.id);
     });
     const have = new Set(links.map((l) => l.id));

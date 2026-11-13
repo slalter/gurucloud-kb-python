@@ -1384,6 +1384,15 @@ class EdgeStats(TypedDict, total=False):
     by_type: dict[str, int]
     by_source: dict[str, int]
     entries_with_edges: int
+    # Graph shape, entry -> entry connections only (a playbook-step link is
+    # not a hop between entries). Absent on a service older than this field set.
+    entry_count: int
+    entry_to_entry: int
+    #: Mean entry connections per entry: 2 * entry_to_entry / entry_count.
+    average_degree: float
+    #: Entries with no connection to another entry.
+    isolated_entries: int
+    max_degree: int
 
 
 class GraphNode(TypedDict, total=False):
