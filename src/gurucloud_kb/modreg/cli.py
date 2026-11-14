@@ -182,8 +182,9 @@ def run_ledger_action(ledger: Any, a: argparse.Namespace) -> dict:
     if action == "close":
         counts = json.loads(a.counts) if a.counts else {}
         pending_kb_ids = ledger.flag_pending_kb_ids(a.run_id)
+        short_kb_ids = ledger.flag_short_kb_ids(a.run_id)
         ledger.close_run(a.run_id, a.outcome or "ok", counts, a.notes)
-        return {"ok": True, "run_id": a.run_id, "pending_kb_ids": pending_kb_ids}
+        return {"ok": True, "run_id": a.run_id, "pending_kb_ids": pending_kb_ids, "short_kb_ids": short_kb_ids}
     if action == "sync-scan":
         from .scan import DEFAULT_FAN_IN_THRESHOLD, scan_repository
 
@@ -203,6 +204,13 @@ def run_ledger_action(ledger: Any, a: argparse.Namespace) -> dict:
     if action == "pending":
         return {"items": ledger.pending_items(a.limit)}
     if action == "decide":
+        if a.kb_entry_id is not None:
+            from .pairs import require_full_kb_entry_id
+
+            try:
+                require_full_kb_entry_id(a.kb_entry_id)
+            except ValueError as exc:
+                raise SystemExit(f"ledger decide refused, nothing stored: {exc}") from exc
         ledger.decide_crawl_item(a.run_id, a.path, a.status, purity=a.purity, kb_entry_id=a.kb_entry_id, duplicate_of=a.duplicate_of, reason=a.reason, kb_id_pending=a.kb_id_pending)
         return {"ok": True, "path": a.path, "status": a.status}
     if action == "kb-ids":

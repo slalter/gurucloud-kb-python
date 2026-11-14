@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Optional
@@ -104,6 +105,27 @@ class RunRow:
     vm_session_id: str
     mode: str
     resumed: bool
+
+
+_FULL_KB_ENTRY_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
+def is_full_kb_entry_id(value: object) -> bool:
+    """True for a complete KB entry id: the 36-character hyphenated UUID."""
+    return isinstance(value, str) and _FULL_KB_ENTRY_ID.fullmatch(value.strip().lower()) is not None
+
+
+def require_full_kb_entry_id(value: str) -> str:
+    """The id normalized (stripped, lower-case), or ValueError when it is not
+    a full UUID. ``get_kb_entry`` resolves a unique hex prefix, so a truncated
+    id looks fine to the agent while the ledger row can no longer be matched
+    to its entry by id (kanban 8eee397f)."""
+    if not is_full_kb_entry_id(value):
+        raise ValueError(
+            f"kb_entry_id {value!r} is not a full KB entry id: pass the complete 36-character UUID "
+            "(xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx) that report_learning / get_kb_entry returned, not a prefix"
+        )
+    return value.strip().lower()
 
 
 class Ledger:
@@ -220,11 +242,17 @@ class Ledger:
         until decided again) passes no ``--reason`` and must not wipe it.
         ``duplicate_of`` is set only on a ``duplicate_of`` decision (omitted
         there, the stored target is kept) and cleared by any other decision
-        (kanban 46252b79)."""
+        (kanban 46252b79).
+
+        A passed ``kb_entry_id`` must be the full 36-character UUID (pending
+        ids are full UUIDs too); a prefix is refused before anything is
+        written (kanban 8eee397f)."""
         if status not in {"cataloged", "not_a_module", "duplicate_of", "retired"}:
             raise ValueError(f"invalid decision {status!r}")
         if kb_id_pending and not kb_entry_id:
             raise ValueError("kb_id_pending needs the kb_entry_id it marks")
+        if kb_entry_id is not None:
+            kb_entry_id = require_full_kb_entry_id(kb_entry_id)
         with self.conn.cursor() as cur:
             cur.execute(
                 "UPDATE crawl_items SET status = %s, purity = COALESCE(%s, purity), kb_entry_id = COALESCE(%s, kb_entry_id), "
@@ -283,6 +311,21 @@ class Ledger:
                 continue
             fid = self.add_finding(run_id, "pending_kb_entry_id", path=row["path"], action="repoint", carry_forward=True,
                                    note="kb_entry_id is still an unconfirmed report_learning pending id",
+                                   detail={"kb_entry_id": row["kb_entry_id"], "decided_in_run": row["decided_in_run"]})
+            out.append({"path": row["path"], "kb_entry_id": row["kb_entry_id"], "finding_id": fid})
+        return out
+
+    def flag_short_kb_ids(self, run_id: int) -> list[dict]:
+        """Record a carry-forward ``short_kb_entry_id`` finding for every
+        cataloged row whose stored id is not a full UUID (called at close).
+        ``decide`` refuses such ids, so these are rows written before that
+        check; re-point each with the full id."""
+        out = []
+        for row in self.kb_id_rows():
+            if is_full_kb_entry_id(row["kb_entry_id"]):
+                continue
+            fid = self.add_finding(run_id, "short_kb_entry_id", path=row["path"], action="repoint", carry_forward=True,
+                                   note="kb_entry_id is not a full 36-character UUID; re-point with ledger decide --kb-entry-id <full id>",
                                    detail={"kb_entry_id": row["kb_entry_id"], "decided_in_run": row["decided_in_run"]})
             out.append({"path": row["path"], "kb_entry_id": row["kb_entry_id"], "finding_id": fid})
         return out

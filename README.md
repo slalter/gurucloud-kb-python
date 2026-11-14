@@ -1123,6 +1123,15 @@ edit the harness, they file a card.
 
 ## Changelog
 
+### 0.20.2
+
+- **modreg `ledger decide` refuses a truncated `--kb-entry-id`** (gurucloudai
+  kanban 8eee397f): the id must be the full 36-character UUID. A prefix
+  (which `get_kb_entry` resolves, hiding the mistake) now exits non-zero
+  with nothing stored instead of printing `{"ok": true}`. `ledger close`
+  returns `short_kb_ids` and records a carry-forward `short_kb_entry_id`
+  finding for each cataloged row stored with a short id by an older version.
+
 ### 0.20.1
 
 - **modreg `ledger decide` keeps the stored reason** (gurucloudai kanban
