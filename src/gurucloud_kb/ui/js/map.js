@@ -251,7 +251,7 @@ export function createMapView(ctx) {
     if (n.hasClass('entry')) html = `<div>${escapeHtml(truncate(d.content || '', 220))}</div><div style="margin-top:5px"><span class="kbx-tip-k">cluster</span>${escapeHtml(d.clusterTitle || '')}${d.distance != null ? ` · <span class="kbx-tip-k">dist</span>${Number(d.distance).toFixed(3)}` : ''}</div>`;
     else if (n.hasClass('cluster')) html = `<div style="font-weight:600">${escapeHtml(d.label)}</div>${d.description ? `<div style="margin-top:3px">${escapeHtml(d.description)}</div>` : ''}<div style="margin-top:4px"><span class="kbx-tip-k">${d.size} entries</span>${d.keywords ? escapeHtml(d.keywords) : ''}</div>`;
     else if (n.hasClass('playbook')) html = `<div style="font-weight:600">Playbook · ${escapeHtml(d.label)}</div><div>${d.steps} steps · ${escapeHtml(d.status)}</div>`;
-    else if (n.hasClass('step')) html = `<div style="font-weight:600">Step ${d.position} · ${escapeHtml(d.fullTitle)}</div><div>${d.linked ? 'cites an entry on this map' : (d.kbEntryId ? 'cites an entry not on this map' : 'no cited entry')}</div>`;
+    else if (n.hasClass('step')) html = `<div style="font-weight:600">Step ${d.position} · ${escapeHtml(d.fullTitle)}</div><div>${stepCitesText(d)}</div>`;
     tip.innerHTML = html;
     const p = evt.renderedPosition || (evt.target.renderedPosition && evt.target.renderedPosition());
     tip.style.left = `${Math.min(p.x, canvas.clientWidth - 320)}px`; tip.style.top = `${p.y}px`; tip.style.display = 'block';
@@ -354,7 +354,7 @@ export function toElements(model) {
     let prev = `p:${p.slug}`;
     p.steps.forEach((s) => {
       const id = `s:${s.id}`;
-      els.push({ data: { id, slug: p.slug, position: s.position, label: truncate(s.title, 28), fullTitle: s.title, linked: s.linked, kbEntryId: s.kbEntryId }, position: { x: s.x, y: s.y }, classes: `step${s.linked ? '' : ' unlinked'}` });
+      els.push({ data: { id, slug: p.slug, position: s.position, label: truncate(s.title, 28), fullTitle: s.title, linked: s.linked, kbEntryId: s.kbEntryId, kbEntryIds: s.kbEntryIds || [], linkedCount: s.linkedCount || 0 }, position: { x: s.x, y: s.y }, classes: `step${s.linked ? '' : ' unlinked'}` });
       if (!p.branching) els.push({ data: { id: `pe:${prev}->${id}`, source: prev, target: id }, classes: 'precedes' });
       prev = id;
     });
@@ -374,6 +374,15 @@ function branchElements(p) {
     out.push({ data: { id: `pe:s:${e.id}`, source: `s:${e.from}`, target: `s:${e.to}`, label, when: e.when || '', limit: e.limit, arc: e.arc }, classes: `precedes branch${e.loop ? ' loop' : ''}` });
   });
   return out;
+}
+
+/** Tooltip line for a step node: how many of its cited entries are on the map. */
+export function stepCitesText(d) {
+  const total = (d.kbEntryIds && d.kbEntryIds.length) || (d.kbEntryId ? 1 : 0);
+  const on = d.linkedCount != null ? d.linkedCount : (d.linked ? 1 : 0);
+  if (!total) return 'no cited entry';
+  if (total === 1) return on ? 'cites an entry on this map' : 'cites an entry not on this map';
+  return `cites ${total} entries, ${on} on this map`;
 }
 
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }

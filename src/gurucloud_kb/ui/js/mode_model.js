@@ -13,7 +13,7 @@
    main.js asks this module which panels to build and where to start so the
    playground cannot reach tabs whose routes its API does not serve. */
 
-export const ALL_PANEL_IDS = Object.freeze(['entries', 'map', 'graph', 'ask', 'similar', 'playbooks', 'process-search', 'schema', 'quality', 'history', 'connect']);
+export const ALL_PANEL_IDS = Object.freeze(['entries', 'map', 'graph', 'relations', 'ask', 'similar', 'playbooks', 'process-search', 'schema', 'quality', 'history', 'connect']);
 export const PLAYGROUND_PANEL_IDS = Object.freeze(['ask', 'graph']);
 export const MODES = Object.freeze(['app', 'sdk', 'platform', 'playground']);
 

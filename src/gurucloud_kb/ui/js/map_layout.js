@@ -11,8 +11,8 @@
        nearest-to-centroid first, so the dense core of a cluster is literally at
        its centre and fringe entries drift outward;
      • playbooks are laid out as horizontal step chains in a column to the
-       right of the cluster field, with a link from each step to the entry it
-       cites when that entry is on the map. A branching playbook (any step with
+       right of the cluster field, with a link from each step to every entry
+       it cites that is on the map. A branching playbook (any step with
        `next` transitions) keeps its steps on the row in position order but its
        edges follow the transitions (labelled with their condition, loops
        marked) instead of the position chain.
@@ -21,7 +21,7 @@
    (tests/test_kb_map_layout.js), which pins the invariants: no cluster
    overlap, every member inside its circle, stable ordering, link resolution. */
 
-import { isBranching, deriveEdges, findStepIndex } from './playbook_graph.js';
+import { isBranching, deriveEdges, findStepIndex, stepEntryIds } from './playbook_graph.js';
 
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 const CLUSTER_GAP = 44;        // min distance between cluster circle edges
@@ -184,11 +184,12 @@ export function buildMapModel(response, opts = {}) {
       const pb = { slug: p.slug, title: p.title || p.slug, status: p.status || 'active', x: startX, y, steps: [], branching: false, edges: [] };
       steps.forEach((s, j) => {
         const sid = `${p.slug}#${s.position ?? j + 1}`;
-        const stepNode = { id: sid, slug: p.slug, position: s.position ?? j + 1, title: s.title || `Step ${j + 1}`, x: startX + STEP_GAP * (j + 1), y, kbEntryId: s.kb_entry_id || null, linked: false };
-        if (s.kb_entry_id && entryIndex.has(String(s.kb_entry_id))) {
-          stepNode.linked = true;
-          model.links.push({ stepId: sid, entryId: String(s.kb_entry_id) });
-        }
+        // Every entry the step cites gets its own edge (kanban 2a7beded):
+        // kb_entry_ids when set, else the legacy single kb_entry_id.
+        const entryIds = stepEntryIds(s).map(String);
+        const onMap = entryIds.filter((id) => entryIndex.has(id));
+        const stepNode = { id: sid, slug: p.slug, position: s.position ?? j + 1, title: s.title || `Step ${j + 1}`, x: startX + STEP_GAP * (j + 1), y, kbEntryId: entryIds[0] || null, kbEntryIds: entryIds, linkedCount: onMap.length, linked: onMap.length > 0 };
+        onMap.forEach((entryId) => model.links.push({ stepId: sid, entryId }));
         pb.steps.push(stepNode);
         maxX = Math.max(maxX, stepNode.x + 40);
       });

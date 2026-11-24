@@ -106,6 +106,16 @@ class TestSyncPlaybooks:
         }
         kb.get_playbook("pm-sweep", include_step_knowledge=True, related_full=True)
         assert dict(route.calls.last.request.url.params) == {"include_linked_entries": "true", "include_step_knowledge": "true", "related_full": "true"}
+        kb.get_playbook(
+            "pm-sweep", include_step_knowledge=True,
+            step_knowledge_budget_chars=40000, step_knowledge_entry_chars=0, step_knowledge_max_entries=4,
+        )
+        assert dict(route.calls.last.request.url.params) == {
+            "include_linked_entries": "true", "include_step_knowledge": "true",
+            "step_knowledge_budget_chars": "40000", "step_knowledge_entry_chars": "0", "step_knowledge_max_entries": "4",
+        }
+        kb.get_playbook("pm-sweep", step_knowledge_budget_chars=40000)  # ignored without the opt-in
+        assert dict(route.calls.last.request.url.params) == {"include_linked_entries": "true"}
         kb.get_playbook("pm-sweep", related_top_k=5, related_banks=["shared"])  # ignored without the opt-in
         assert dict(route.calls.last.request.url.params) == {"include_linked_entries": "true"}
 

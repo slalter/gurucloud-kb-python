@@ -54,6 +54,41 @@ class RateLimitError(APIError):
         super().__init__(429, code, message)
 
 
+class StaleEditError(APIError):
+    """Raised on 412 ``stale_edit``: an entry update carried
+    ``expected_updated_at`` and/or ``expected_content_sha256`` and the live
+    entry no longer matches them (another write, e.g. a dedup merge, landed
+    after you read it). Nothing was written.
+
+    Attributes:
+        entry_id: the entry you tried to update.
+        mismatched: which preconditions failed (``updated_at``,
+            ``content_sha256``).
+        expected_updated_at / actual_updated_at: the timestamp you sent and
+            the live one.
+        expected_content_sha256 / actual_content_sha256: the digest you sent
+            and the live one.
+        current_state: the live entry (``content``, ``useful_for``,
+            ``relevant_systems``, ``relevant_tasks``, ``metadata``,
+            ``updated_at``, ``content_sha256``, ...).
+
+    Resolve by re-applying your edit to ``current_state`` and sending it again
+    with ``expected_updated_at=current_state["updated_at"]``.
+    """
+
+    def __init__(self, message: str, details: dict | None = None) -> None:
+        details = details or {}
+        self.entry_id: str | None = details.get("entry_id")
+        self.mismatched: list[str] = list(details.get("mismatched") or [])
+        self.expected_updated_at: str | None = details.get("expected_updated_at")
+        self.actual_updated_at: str | None = details.get("actual_updated_at")
+        self.expected_content_sha256: str | None = details.get("expected_content_sha256")
+        self.actual_content_sha256: str | None = details.get("actual_content_sha256")
+        current = details.get("current_state")
+        self.current_state: dict = dict(current) if isinstance(current, dict) else {}
+        super().__init__(412, "stale_edit", message)
+
+
 class ConnectionError(GuruCloudError):
     """Raised when the SDK cannot reach the API."""
 

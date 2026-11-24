@@ -221,3 +221,118 @@ class TestGraphLayoutSdk:
             layout: Any = await kb.graph_layout(space="useful_for")
         assert layout["status"] == "empty"
 
+
+
+class TestLivingVocabulary:
+    """kb.edge_types / propose_edge_relation / set_edge_relations_open / edge_relation_events,
+    gurucloud-kb 0.21.0 (kanban 6b4fd3bf)."""
+
+    TYPES = {"open": True, "total_edges": 3, "undeclared": {},
+             "relations": [{"name": "cites", "origin": "builtin", "edge_count": 2}, {"name": "blocks", "origin": "coined", "edge_count": 1}]}
+    ADDED = {"status": "added", "use": "blocks", "judged": True, "relation": {"name": "blocks", "origin": "coined"}}
+
+    @respx.mock
+    def test_sync_methods_send_the_documented_requests(self) -> None:
+        types = respx.get(f"{API_PREFIX}/banks/kb-1/edge-types").mock(return_value=httpx.Response(200, json={"data": self.TYPES}))
+        propose = respx.post(f"{API_PREFIX}/banks/kb-1/edge-relations/propose").mock(return_value=httpx.Response(200, json={"data": self.ADDED}))
+        opened = respx.put(f"{API_PREFIX}/banks/kb-1/edge-relations/open").mock(return_value=httpx.Response(200, json={"data": {"open": True}}))
+        events = respx.get(f"{API_PREFIX}/banks/kb-1/edge-relations/events").mock(
+            return_value=httpx.Response(200, json={"data": {"events": [{"action": "added", "relation": "blocks"}]}}))
+        edges = respx.get(f"{API_PREFIX}/banks/kb-1/edges").mock(return_value=httpx.Response(200, json={"data": {"edges": [], "ends": {}}}))
+        kb = _kb()
+        out: Any = kb.edge_types()
+        assert [r["edge_count"] for r in out["relations"]] == [2, 1] and types.calls[0].request.url.params["samples"] == "true"
+        kb.edge_types(samples=False)
+        assert types.calls[1].request.url.params["samples"] == "false"
+        added: Any = kb.propose_edge_relation(
+            "blocks", "from prevents to from proceeding", inverse="is blocked by", reason="requires points the other way",
+            example={"from_text": "lock held", "to_text": "deploy step"})
+        assert added["use"] == "blocks"
+        assert json.loads(propose.calls[0].request.content) == {
+            "name": "blocks", "description": "from prevents to from proceeding", "symmetric": False, "inverse": "is blocked by",
+            "reason": "requires points the other way", "example": {"from_text": "lock held", "to_text": "deploy step"},
+        }
+        kb.propose_edge_relation("pairs_with", "the two are used together", symmetric=True)
+        assert json.loads(propose.calls[1].request.content) == {"name": "pairs_with", "description": "the two are used together", "symmetric": True}
+        vocab: Any = kb.set_edge_relations_open(True, reason="experiment")
+        assert vocab["open"] is True and json.loads(opened.calls[0].request.content) == {"open": True, "reason": "experiment"}
+        kb.set_edge_relations_open(False)
+        assert json.loads(opened.calls[1].request.content) == {"open": False}
+        assert kb.edge_relation_events(relation="blocks", limit=5) == [{"action": "added", "relation": "blocks"}]
+        assert dict(events.calls[0].request.url.params) == {"limit": "5", "offset": "0", "relation": "blocks"}
+        kb.list_connections(edge_type="blocks", include_ends=True)
+        assert edges.calls[0].request.url.params["include_ends"] == "true"
+        kb.list_connections()
+        assert "include_ends" not in edges.calls[1].request.url.params
+
+    @respx.mock
+    def test_merge_and_retire_send_the_documented_requests(self) -> None:
+        """gurucloud-kb 0.22.0 (kanban 1a2a5590)."""
+        from gurucloud_kb import GuruCloudError
+
+        merge = respx.post(f"{API_PREFIX}/banks/kb-1/edge-relations/needed_by/merge").mock(return_value=httpx.Response(
+            200, json={"data": {"relation": "needed_by", "into": "requires", "retyped": 2, "duplicates_removed": 1, "removed": True}}))
+        retire = respx.post(f"{API_PREFIX}/banks/kb-1/edge-relations/pairs_with/retire").mock(
+            return_value=httpx.Response(200, json={"data": {"relation": "pairs_with", "removed": True}}))
+        respx.post(f"{API_PREFIX}/banks/kb-1/edge-relations/cites/retire").mock(return_value=httpx.Response(
+            409, json={"error": {"code": "relation_not_removable", "message": "'cites' is a built-in relation"}}))
+        kb = _kb()
+        out: Any = kb.merge_edge_relation("needed_by", "requires", swap_ends=True, reason="same meaning")
+        assert (out["retyped"], out["duplicates_removed"], out["removed"]) == (2, 1, True)
+        assert json.loads(merge.calls[0].request.content) == {"into": "requires", "swap_ends": True, "dry_run": False, "reason": "same meaning"}
+        kb.merge_edge_relation("needed_by", "requires", dry_run=True)
+        assert json.loads(merge.calls[1].request.content) == {"into": "requires", "swap_ends": False, "dry_run": True}
+        gone: Any = kb.retire_edge_relation("pairs_with")
+        assert gone["removed"] is True and json.loads(retire.calls[0].request.content) == {}
+        kb.retire_edge_relation("pairs_with", reason="never used")
+        assert json.loads(retire.calls[1].request.content) == {"reason": "never used"}
+        with pytest.raises(GuruCloudError, match="built-in relation"):
+            kb.retire_edge_relation("cites")
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_merge_and_retire_async_mirror(self) -> None:
+        respx.get(f"{API_PREFIX}/banks/kb-1").mock(return_value=httpx.Response(200, json={"data": KB_INFO}))
+        merge = respx.post(f"{API_PREFIX}/banks/kb-1/edge-relations/needed_by/merge").mock(
+            return_value=httpx.Response(200, json={"data": {"retyped": 2, "removed": True}}))
+        retire = respx.post(f"{API_PREFIX}/banks/kb-1/edge-relations/pairs_with/retire").mock(
+            return_value=httpx.Response(200, json={"data": {"removed": True}}))
+        async with AsyncGuruCloudClient(api_key=API_KEY, base_url=BASE_URL) as client:
+            kb = await client.get_kb("kb-1")
+            out: Any = await kb.merge_edge_relation("needed_by", "requires", swap_ends=True, dry_run=True)
+            assert out["retyped"] == 2
+            assert (await kb.retire_edge_relation("pairs_with", reason="never used"))["removed"] is True
+        assert json.loads(merge.calls[0].request.content) == {"into": "requires", "swap_ends": True, "dry_run": True}
+        assert json.loads(retire.calls[0].request.content) == {"reason": "never used"}
+
+    @respx.mock
+    def test_a_closed_bank_surfaces_as_an_error(self) -> None:
+        from gurucloud_kb import GuruCloudError
+
+        respx.post(f"{API_PREFIX}/banks/kb-1/edge-relations/propose").mock(return_value=httpx.Response(
+            403, json={"error": {"code": "edge_relations_closed", "message": "this bank's relation vocabulary is closed to agents"}}))
+        with pytest.raises(GuruCloudError, match="closed to agents"):
+            _kb().propose_edge_relation("blocks", "from prevents to from proceeding")
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_async_mirror(self) -> None:
+        respx.get(f"{API_PREFIX}/banks/kb-1").mock(return_value=httpx.Response(200, json={"data": KB_INFO}))
+        respx.get(f"{API_PREFIX}/banks/kb-1/edge-types").mock(return_value=httpx.Response(200, json={"data": self.TYPES}))
+        propose = respx.post(f"{API_PREFIX}/banks/kb-1/edge-relations/propose").mock(return_value=httpx.Response(200, json={"data": self.ADDED}))
+        opened = respx.put(f"{API_PREFIX}/banks/kb-1/edge-relations/open").mock(return_value=httpx.Response(200, json={"data": {"open": False}}))
+        respx.get(f"{API_PREFIX}/banks/kb-1/edge-relations/events").mock(return_value=httpx.Response(200, json={"data": {"events": []}}))
+        edges = respx.get(f"{API_PREFIX}/banks/kb-1/edges").mock(return_value=httpx.Response(200, json={"data": {"edges": []}}))
+        async with AsyncGuruCloudClient(api_key=API_KEY, base_url=BASE_URL) as client:
+            kb = await client.get_kb("kb-1")
+            out: Any = await kb.edge_types()
+            assert out["relations"][1]["origin"] == "coined"
+            added: Any = await kb.propose_edge_relation("blocks", "from prevents to from proceeding", inverse="is blocked by")
+            assert added["status"] == "added"
+            await kb.set_edge_relations_open(False)
+            assert await kb.edge_relation_events() == []
+            await kb.list_connections(include_ends=True)
+        assert json.loads(propose.calls[0].request.content) == {
+            "name": "blocks", "description": "from prevents to from proceeding", "symmetric": False, "inverse": "is blocked by"}
+        assert json.loads(opened.calls[0].request.content) == {"open": False}
+        assert edges.calls[0].request.url.params["include_ends"] == "true"

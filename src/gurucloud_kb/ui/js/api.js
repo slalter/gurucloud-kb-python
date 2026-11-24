@@ -117,6 +117,14 @@ export function createApi(kbId, base, opts = {}) {
     listEdges: (params) => req('GET', '/edges', { params }),
     edgeStats: () => req('GET', '/edge-stats'),
     edgeRelations: () => req('GET', '/edge-relations'),
+    // the living vocabulary (kanban 6b4fd3bf)
+    edgeTypes: (params) => req('GET', '/edge-types', { params }),
+    proposeEdgeRelation: (payload) => req('POST', '/edge-relations/propose', { body: payload }),
+    setEdgeRelationsOpen: (payload) => req('PUT', '/edge-relations/open', { body: payload }),
+    edgeRelationEvents: (params) => req('GET', '/edge-relations/events', { params }),
+    // fold a relation into another / drop an unused one (kanban 1a2a5590)
+    mergeEdgeRelation: (name, payload) => req('POST', `/edge-relations/${encodeURIComponent(name)}/merge`, { body: payload }),
+    retireEdgeRelation: (name, payload) => req('POST', `/edge-relations/${encodeURIComponent(name)}/retire`, { body: payload || {} }),
     graph: (params) => req('GET', '/graph', { params }),
     graphLayout: (params) => req('GET', '/graph/layout', { params }),
     recomputeGraphLayout: (params) => req('POST', '/graph/layout/recompute', { params }),

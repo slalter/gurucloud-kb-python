@@ -26,11 +26,13 @@ import {
   pictureOptions, pinPositions, pointerLine, resultsOf, scene, searchGraph, searchPayload, settingsKey,
 } from './graph_model.js';
 import { ensureForceGraph3D as ensureLib, loadBankEdges } from './graph3d.js';
+import { relationColor, relationLegend, toggleHidden, visibleEdges } from './relations_model.js';
 
 const COLORS = { hit: '#5ee0c8', folded: '#f2b23a', neighbor: '#b7c4c6', ctx: '#8fa6aa', bank: '#72a6ab', bankDim: '#2d4448', dust: '#3a5054', bg: '#0f1719', selected: '#ffffff' };
 const SEM_SCALE = 420;
 const POLL_MS = 4000;
 const POLL_MAX = 40;
+const THICK_LINK_MAX = 1500;   // above this many links a cylinder per link costs too much; they stay 1px lines
 
 
 export function createGraphView(ctx) {
@@ -45,6 +47,9 @@ export function createGraphView(ctx) {
   const layouts = {};            // space -> GET /graph/layout body
   let pollTimer = null;
   let pollCount = 0;
+  let vocabulary = null;         // GET /edge-types: gives every relation, coined ones included, its colour
+  let hiddenRelations = [];      // relation names the legend has switched off
+  let thinLinkWidth = 0;         // unlit links: a visible width on small pictures so the relation colour reads, a 1px line on big ones
   let busy = false;
   let selectedId = null;
   let pendingFit = null;         // what the next engine stop frames (fitPlan); consumed once
@@ -99,7 +104,10 @@ export function createGraphView(ctx) {
     h('span', {}, h('i', { class: 'g-neighbor' }), 'pointer: one hop off the results'),
     h('span', {}, h('i', { class: 'g-ctx' }), 'other connection'),
     h('span', {}, h('i', { class: 'g-edge' }), 'edge the agent is told about (particles)'));
-  const canvasWrap = h('div', { class: 'kbx-map-canvas-wrap kbx-graph3d-wrap' }, canvas, hud, legend, overlay);
+  // One swatch per relation that has a drawn edge; click shows only that
+  // relation, shift/ctrl-click toggles it (relations_model.toggleHidden).
+  const relationBar = h('div', { class: 'kbx-graph-relations', dataset: { role: 'graph-relations' }, style: { display: 'none' } });
+  const canvasWrap = h('div', { class: 'kbx-map-canvas-wrap kbx-graph3d-wrap' }, canvas, hud, relationBar, legend, overlay);
 
   const answerHost = h('div', { dataset: { role: 'graph-answer' } });
   const selectedHost = h('div', { dataset: { role: 'graph-selected' } }, h('div', { class: 'kbx-hint' }, 'Click a node to see the entry and its connections.'));
@@ -115,11 +123,12 @@ export function createGraphView(ctx) {
   const storeKey = settingsKey(api.kbId);
   function options() { return normalizeOptions({ k: kInput.value, collapse: collapseCb.checked, maxNeighbors: neighborsSel.value, context: contextCb.checked }); }
   function picture() { return pictureOptions({ focus: focusSel.value, layout: layoutSel.value, hideBackfill: backfillCb.checked }); }
-  function saveSettings() { try { localStorage.setItem(storeKey, JSON.stringify({ ...options(), ...picture() })); } catch { /* ignore */ } }
+  function saveSettings() { try { localStorage.setItem(storeKey, JSON.stringify({ ...options(), ...picture(), hiddenRelations })); } catch { /* ignore */ } }
   function loadSettings() {
     let s = null;
     try { s = JSON.parse(localStorage.getItem(storeKey) || 'null'); } catch { s = null; }
     if (!s) return;
+    hiddenRelations = Array.isArray(s.hiddenRelations) ? s.hiddenRelations.filter((x) => typeof x === 'string') : [];
     const o = normalizeOptions(s); const p = pictureOptions(s);
     kInput.value = String(o.k); collapseCb.checked = o.collapse; neighborsSel.value = String(o.maxNeighbors); contextCb.checked = o.context;
     neighborsSel.disabled = !o.collapse; focusSel.value = p.focus; layoutSel.value = p.layout; backfillCb.checked = p.hideBackfill;
@@ -178,7 +187,25 @@ export function createGraphView(ctx) {
     parts.push(`<span style="opacity:.7">${n.degree || 0} connection${n.degree === 1 ? '' : 's'}</span>`);
     return `<div class="kbx kbx-graph-tip">${parts.join('<br>')}</div>`;
   }
-  function linkColor(l) { return l.pointer ? COLORS.folded : (RELATION_COLORS[l.relation] || RELATION_COLORS.connected); }
+  function linkColor(l) {
+    if (l.pointer) return COLORS.folded;
+    return l.relation && l.relation !== 'connected' ? relationColor(l.relation, vocabulary) : RELATION_COLORS.connected;
+  }
+
+  function renderRelationBar() {
+    const items = relationLegend([...(bankEdges || []), ...extraEdges], vocabulary, hiddenRelations);
+    if (!items.length) { relationBar.style.display = 'none'; return; }
+    const names = items.map((i) => i.name);
+    relationBar.style.display = '';
+    mount(relationBar,
+      h('div', { class: 'kbx-graph-relations-head' }, 'Relations',
+        hiddenRelations.length ? h('button', { class: 'kbx-graph-relations-all', type: 'button', dataset: { role: 'graph-relations-all', action: 'graph_relations_show_all' }, onClick: () => { hiddenRelations = []; saveSettings(); render('picture'); } }, 'show all') : null),
+      ...items.map((i) => h('button', {
+        class: `kbx-graph-relation${i.hidden ? ' is-off' : ''}`, type: 'button', title: 'Click: only this relation. Shift-click: hide or show it.',
+        dataset: { role: 'graph-relation', relation: i.name, hidden: i.hidden ? '1' : '0', action: 'graph_relation_filter', targetRelation: i.name },
+        onClick: (e) => { hiddenRelations = toggleHidden(hiddenRelations, i.name, names, { additive: e.shiftKey || e.ctrlKey || e.metaKey }); saveSettings(); render('picture'); },
+      }, h('i', { style: { background: i.color } }), h('span', {}, i.label), h('b', {}, num(i.count)))));
+  }
 
   /** Redraw; `fit` is the camera intent once the engine settles (see fitPlan). */
   async function render(fit = 'picture') {
@@ -187,7 +214,8 @@ export function createGraphView(ctx) {
     pendingFit = fit;
     const o = options(); const p = picture();
     const answer = lastAnswer ? searchGraph(lastAnswer.results, lastAnswer.connections, { context: o.context }) : null;
-    const sc = scene([...bankEdges, ...extraEdges], answer, { focus: p.focus, hideBackfill: p.hideBackfill });
+    renderRelationBar();
+    const sc = scene(visibleEdges([...bankEdges, ...extraEdges], hiddenRelations), answer, { focus: p.focus, hideBackfill: p.hideBackfill });
     sc.nodes.forEach((n) => { if (!n.text && bankEnds[n.id]) n.text = labelFor(bankEnds[n.id]); });
     // semantic layout: pin to the service's positions when ready, poll while computing
     let pinned = null;
@@ -214,6 +242,7 @@ export function createGraphView(ctx) {
     const sem = p.layout !== 'force' && pinned;
     fg.cooldownTicks(sem ? 20 : 160).warmupTicks(sem ? 0 : 30);
     fg.d3Force('charge').strength(sem ? -3 : -40);
+    thinLinkWidth = sc.links.length <= THICK_LINK_MAX ? 0.5 : 0;
     fg.graphData({ nodes: sc.nodes, links: sc.links });
     caption.textContent = lastAnswer
       ? `${sc.stats.hits} retrieved · ${Math.max(0, sc.stats.lit - sc.stats.hits)} pointed at · ${sc.stats.links} edges shown${sc.stats.added ? ` · ${sc.stats.added} without connections yet` : ''}`
@@ -261,7 +290,7 @@ export function createGraphView(ctx) {
         .backgroundColor(COLORS.bg)
         .nodeVal((n) => n.val || 1).nodeColor(nodeColor).nodeOpacity(0.95)
         .nodeLabel(nodeTip)
-        .linkColor(linkColor).linkOpacity(0.6).linkWidth((l) => (l.lit ? 1.4 : 0))
+        .linkColor(linkColor).linkOpacity(0.6).linkWidth((l) => (l.lit ? 1.4 : thinLinkWidth))
         .linkDirectionalParticles((l) => (l.pointer ? 3 : 0)).linkDirectionalParticleWidth(1.8).linkDirectionalParticleColor(() => COLORS.folded)
         .onNodeClick((n) => selectNode(n))
         .onNodeHover((n) => { canvas.style.cursor = n ? 'pointer' : 'default'; })
@@ -388,10 +417,37 @@ export function createGraphView(ctx) {
     const ok = await initGraph();
     try { await fetchBankEdges(); }
     catch (e) { showOverlay(h('div', { class: 'kbx-alert danger' }, `Could not load connections: ${e.message}`)); return; }
+    await fetchVocabulary();
+    applyRelationFocus();
     if (!ok) return;
     await render();
   }
-  function onShow() { if (fg && canvas.clientWidth) fg.width(canvas.clientWidth).height(canvas.clientHeight); }
+
+  /** The bank's relations, for their colours (a service without /edge-types
+      keeps the built-in colours and a stable pick for anything else). */
+  async function fetchVocabulary() {
+    if (ctx.relationVocabulary) { vocabulary = ctx.relationVocabulary; return; }
+    if (!api.edgeTypes) return;
+    try { vocabulary = await api.edgeTypes({ samples: false }); } catch { vocabulary = null; }
+  }
+
+  /** "Show in graph" on the Relations tab: draw only that relation, whole bank. */
+  function applyRelationFocus() {
+    const name = ctx.relationFocus;
+    if (!name) return false;
+    ctx.relationFocus = null;
+    const names = [...new Set([...(bankEdges || []), ...extraEdges].map((e) => e && e.edge_type).filter(Boolean))];
+    hiddenRelations = names.filter((n) => n !== name);
+    queryInput.value = ''; lastAnswer = null;
+    saveSettings();
+    return true;
+  }
+
+  function onShow() {
+    if (fg && canvas.clientWidth) fg.width(canvas.clientWidth).height(canvas.clientHeight);
+    if (ctx.relationVocabulary) vocabulary = ctx.relationVocabulary;
+    if (applyRelationFocus()) render('picture');
+  }
 
   return { el, load, onShow };
 }

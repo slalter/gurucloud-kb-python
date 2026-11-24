@@ -6,6 +6,7 @@ import time
 
 from datetime import datetime
 from typing import Any, Callable, Literal, Mapping, Optional, Sequence
+from urllib.parse import quote
 
 from gurucloud_kb._http import HTTPClient
 from gurucloud_kb import _playbooks as _pb
@@ -57,7 +58,12 @@ from gurucloud_kb.types import (
     EdgeSource,
     EdgeStats,
     EdgeRelationConfig,
+    EdgeRelationEvent,
+    EdgeRelationMerge,
+    EdgeRelationRetirement,
+    EdgeRelationProposal,
     EdgeRelationVocabulary,
+    EdgeTypes,
     EdgeType,
     EntryConnections,
     GraphLayout,
@@ -332,6 +338,8 @@ class KnowledgeBank:
         remove_systems: Optional[list[str]] = None,
         add_tasks: Optional[list[str]] = None,
         remove_tasks: Optional[list[str]] = None,
+        expected_updated_at: Optional[str] = None,
+        expected_content_sha256: Optional[str] = None,
     ) -> EntryResult:
         """Update an entry in place (re-embedding what changed).
 
@@ -349,6 +357,12 @@ class KnowledgeBank:
                 ``relevant_tasks``.
             add_systems / remove_systems / add_tasks / remove_tasks:
                 Incremental tag edits.
+            expected_updated_at / expected_content_sha256: Optional
+                stale-edit precondition: the ``updated_at`` (ISO-8601) and/or
+                SHA-256 hex digest of ``content`` you read. If the live entry
+                changed since, nothing is written and
+                :class:`~gurucloud_kb.errors.StaleEditError` is raised with
+                its ``current_state``.
 
         Returns:
             The server's result (``{"success": true, ...}``).
@@ -356,6 +370,8 @@ class KnowledgeBank:
         Raises:
             ValueError: unknown key in ``updates``, a field given both ways,
                 or nothing to change.
+            StaleEditError: a precondition was given and the entry changed
+                since (412 ``stale_edit``); nothing was written.
         """
         body = build_entry_update(
             updates,
@@ -368,6 +384,8 @@ class KnowledgeBank:
             remove_systems=remove_systems,
             add_tasks=add_tasks,
             remove_tasks=remove_tasks,
+            expected_updated_at=expected_updated_at,
+            expected_content_sha256=expected_content_sha256,
         )
         return self._http.patch(self._path(f"/entries/{entry_id}"), json=body)
 
@@ -857,13 +875,17 @@ class KnowledgeBank:
 
     def list_connections(
         self, *, edge_type: EdgeType | None = None, source: EdgeSource | None = None, limit: int = 100, offset: int = 0,
+        include_ends: bool = False,
     ) -> ConnectionList:
-        """The bank's connections, newest first, optionally by type or source."""
+        """The bank's connections, newest first, optionally by type or source.
+        ``include_ends`` adds ``ends``: what each connected entry says, keyed by id."""
         params: dict[str, Any] = {"limit": limit, "offset": offset}
         if edge_type:
             params["edge_type"] = edge_type
         if source:
             params["source"] = source
+        if include_ends:
+            params["include_ends"] = "true"
         return self._http.get(self._path("/edges"), params=params)
 
     def edge_relations(self) -> EdgeRelationVocabulary:
@@ -905,6 +927,101 @@ class KnowledgeBank:
         """
         body: dict[str, Any] = {"relations": [dict(r) for r in relations], "replace_defaults": bool(replace_defaults)}
         return self._http.put(self._path("/edge-relations"), json=body)
+
+    def edge_types(self, *, samples: bool = True) -> EdgeTypes:
+        """Every relation of this bank with how many connections use it: the
+        vocabulary of ``edge_relations()`` joined to the stored edges, each
+        row with its ``origin`` (builtin | declared | coined), ``edge_count``
+        and, with ``samples``, the newest connection of that type with both
+        ends summarised::
+
+            for r in kb.edge_types()["relations"]:
+                print(r["name"], r["edge_count"], r["origin"])
+
+        The connections OF one relation are ``kb.list_connections(edge_type=...)``.
+        """
+        return self._http.get(self._path("/edge-types"), params={"samples": "true" if samples else "false"})
+
+    def propose_edge_relation(
+        self, name: str, description: str, *, inverse: str = "", symmetric: bool = False,
+        reason: Optional[str] = None, example: Optional[dict[str, str]] = None,
+    ) -> EdgeRelationProposal:
+        """Coin a relation the vocabulary lacks. Requires ``write`` scope and a
+        bank whose vocabulary is open (``set_edge_relations_open(True)``).
+
+        A judge checks the proposal against the bank's relations first:
+        ``status`` is ``added`` (now part of the vocabulary), ``use_existing``
+        (the proposal was mapped to an existing relation that already means
+        this; ``reversed`` true means it reads from the other end, so connect
+        with the two entries swapped) or ``exists``; ``use`` is the relation
+        to connect with::
+
+            out = kb.propose_edge_relation(
+                "blocks", "from prevents to from proceeding until from is resolved", inverse="is blocked by")
+            kb.connect(lock_entry, deploy_entry, out["use"])
+
+        ``example`` is ``{"from_text", "to_text"}``: what the two entries you
+        want to connect say. Refused with ``edge_relations_closed`` (HTTP 403)
+        on a closed bank.
+        """
+        body: dict[str, Any] = {"name": name, "description": description, "symmetric": bool(symmetric)}
+        if inverse:
+            body["inverse"] = inverse
+        if reason:
+            body["reason"] = reason
+        if example:
+            body["example"] = dict(example)
+        return self._http.post(self._path("/edge-relations/propose"), json=body)
+
+    def set_edge_relations_open(self, open: bool, *, reason: Optional[str] = None) -> EdgeRelationVocabulary:  # noqa: A002
+        """Let agents coin relations in this bank (``True``) or stop them.
+        Requires ``write`` scope. Relations already coined stay either way."""
+        body: dict[str, Any] = {"open": bool(open)}
+        if reason:
+            body["reason"] = reason
+        return self._http.put(self._path("/edge-relations/open"), json=body)
+
+    def edge_relation_events(self, *, relation: Optional[str] = None, limit: int = 50, offset: int = 0) -> list[EdgeRelationEvent]:
+        """The vocabulary's audit trail, newest first: every proposal with its
+        outcome and the judge's exchange, and each open / close."""
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if relation:
+            params["relation"] = relation
+        out = self._http.get(self._path("/edge-relations/events"), params=params)
+        return list((out or {}).get("events") or [])
+
+    def merge_edge_relation(
+        self, name: str, into: str, *, swap_ends: bool = False, dry_run: bool = False, reason: Optional[str] = None,
+    ) -> EdgeRelationMerge:
+        """Fold relation ``name`` into ``into``. Requires ``write`` scope and
+        manage rights on the bank.
+
+        Every connection typed ``name`` becomes ``into`` (keeping its id, note
+        and history), a connection that already exists as ``into`` between the
+        same two entries is removed instead of doubled, and ``name`` leaves the
+        bank's list. Pass ``swap_ends=True`` when the two read from opposite
+        ends (``needed_by`` into ``requires``); ``dry_run=True`` only counts::
+
+            plan = kb.merge_edge_relation("needed_by", "requires", swap_ends=True, dry_run=True)
+            print(plan["retyped"], plan["duplicates_removed"])
+            kb.merge_edge_relation("needed_by", "requires", swap_ends=True, reason="same meaning")
+
+        Only a relation the bank added (coined or declared) can be merged away:
+        a built-in answers ``relation_not_removable`` (HTTP 409), and
+        ``swap_ends`` over a connection that points at a playbook step answers
+        ``edges_not_swappable`` (HTTP 409) with nothing changed.
+        """
+        body: dict[str, Any] = {"into": into, "swap_ends": bool(swap_ends), "dry_run": bool(dry_run)}
+        if reason:
+            body["reason"] = reason
+        return self._http.post(self._path(f"/edge-relations/{quote(name, safe='')}/merge"), json=body)
+
+    def retire_edge_relation(self, name: str, *, reason: Optional[str] = None) -> EdgeRelationRetirement:
+        """Drop a relation the bank added that no connection carries. While
+        connections use it the answer is ``edge_types_in_use`` (HTTP 409):
+        merge it into another relation instead."""
+        body: dict[str, Any] = {"reason": reason} if reason else {}
+        return self._http.post(self._path(f"/edge-relations/{quote(name, safe='')}/retire"), json=body)
 
     def connection_stats(self) -> EdgeStats:
         """Counts by type and by source, how many entries are connected, and the
@@ -1309,6 +1426,9 @@ class KnowledgeBank:
         related_top_k: int | None = None,
         related_banks: list[str] | None = None,
         related_full: bool = False,
+        step_knowledge_budget_chars: int | None = None,
+        step_knowledge_entry_chars: int | None = None,
+        step_knowledge_max_entries: int | None = None,
     ) -> Playbook:
         """One playbook by slug: every step in order, linked entries inlined.
 
@@ -1317,7 +1437,11 @@ class KnowledgeBank:
         (edges and ``metadata.applies_at``) with full text and a breadcrumb, and
         ``related_top_k`` semantic matches on the step text per bank (the
         playbook's own bank plus ``related_banks``), summaries only unless
-        ``related_full``; ``knowledge`` says how it was assembled and which
+        ``related_full``. Bound the block with ``step_knowledge_budget_chars``
+        (the whole block, serialised characters), ``step_knowledge_entry_chars``
+        (each body cut to that length, 0 = handles only) and
+        ``step_knowledge_max_entries`` (per step); needs a platform image of
+        1.16.0 or later. ``knowledge`` says how it was assembled and which
         bodies the size cap dropped (kb-platform >= 1.11.0).
         """
         return self._http.get(
@@ -1328,6 +1452,9 @@ class KnowledgeBank:
                 related_top_k=related_top_k,
                 related_banks=related_banks,
                 related_full=related_full,
+                step_knowledge_budget_chars=step_knowledge_budget_chars,
+                step_knowledge_entry_chars=step_knowledge_entry_chars,
+                step_knowledge_max_entries=step_knowledge_max_entries,
             ),
         )
 

@@ -18,6 +18,7 @@ from gurucloud_kb.errors import (
     PlaybookStepConflictError,
     PlaybookVersionConflictError,
     PlaybookRunError,
+    StaleEditError,
     RUN_ADVANCE_ERROR_CODES,
     AuthenticationError,
     ConnectionError,
@@ -125,6 +126,9 @@ class AsyncHTTPClient:
         if status == 409 and code in RUN_ADVANCE_ERROR_CODES:
             details = error.get("details") if isinstance(error, dict) else None
             raise PlaybookRunError(message, details if isinstance(details, dict) else None)
+        if status == 412 and code == "stale_edit":
+            details = error.get("details") if isinstance(error, dict) else None
+            raise StaleEditError(message, details if isinstance(details, dict) else None)
         if status == 401:
             raise AuthenticationError(code, message)
         if status == 403:

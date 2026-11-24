@@ -684,3 +684,38 @@
   .kbx .kbx-agents-canvas { height: 340px; }
   .kbx .kbx-agents-toolbar .kbx-btn { flex: 0 0 auto; }
 }
+
+/* ── Relations tab + the Graph tab's relation legend (kanban 6b4fd3bf) ── */
+.kbx .kbx-rel-stage { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: var(--mk-space-md); align-items: start; }
+@media (max-width: 1000px) { .kbx .kbx-rel-stage { grid-template-columns: minmax(0, 1fr); } }
+.kbx .kbx-rel-stage > * { min-width: 0; }
+.kbx .kbx-rel-open { display: block; margin-top: 4px; }
+.kbx .kbx-rel-open-state { margin-top: 4px; font-size: 12.5px; line-height: 1.5; }
+.kbx .kbx-rel-stage > [data-role="relations-detail"] { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow-y: auto; }
+@media (max-width: 1000px) { .kbx .kbx-rel-stage > [data-role="relations-detail"] { position: static; max-height: none; } }
+.kbx .kbx-rel-swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; flex: 0 0 auto; }
+.kbx .kbx-rel-name { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.kbx .kbx-rel-phrase { font-size: 12px; margin-top: 3px; }
+.kbx .kbx-rel-meaning { max-width: 420px; line-height: 1.45; }
+.kbx .kbx-rel-table tbody tr { cursor: pointer; }
+.kbx .kbx-rel-table tbody tr.is-selected { background: var(--kbx-primary-wash); box-shadow: inset 3px 0 0 var(--kbx-primary); }
+.kbx .kbx-rel-table tbody tr:focus-visible { outline: 2px solid var(--kbx-primary); outline-offset: -2px; }
+.kbx .kbx-rel-count { font-weight: 600; color: var(--kbx-heading); }
+.kbx .kbx-rel-bar { height: 4px; border-radius: 2px; background: var(--kbx-surface-2); margin-top: 4px; min-width: 70px; overflow: hidden; }
+.kbx .kbx-rel-bar i { display: block; height: 100%; border-radius: 2px; }
+.kbx .kbx-rel-edge { padding: 8px 10px; border: 1px solid var(--kbx-border); border-left: 4px solid var(--kbx-border-strong); border-radius: var(--kbx-radius-sm); background: var(--kbx-surface-2); font-size: var(--mk-para-s-size); line-height: 1.45; overflow-wrap: anywhere; }
+.kbx .kbx-rel-edge-verb { color: var(--kbx-muted); font-size: 12px; margin: 2px 0; }
+.kbx .kbx-graph-relations {
+  position: absolute; top: 48px; left: 10px; z-index: 4; max-height: calc(100% - 130px); overflow-y: auto; width: 190px;
+  background: rgba(15,23,25,.82); border: 1px solid #24363b; border-radius: var(--kbx-radius-sm); padding: 8px; display: flex; flex-direction: column; gap: 2px;
+}
+.kbx .kbx-graph-relations-head { display: flex; justify-content: space-between; align-items: center; font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: #9fb4b8; font-weight: 700; margin-bottom: 4px; }
+.kbx .kbx-graph-relations-all { border: 0; background: transparent; color: #5ee0c8; font-size: 11px; cursor: pointer; padding: 0; text-transform: none; letter-spacing: 0; }
+.kbx .kbx-graph-relation { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; gap: 7px; align-items: center; border: 0; background: transparent; color: #e6eef0; font-size: 12px; text-align: left; padding: 3px 4px; border-radius: 4px; cursor: pointer; }
+.kbx .kbx-graph-relation:hover { background: rgba(255,255,255,.08); }
+.kbx .kbx-graph-relation i { width: 12px; height: 4px; border-radius: 2px; display: inline-block; }
+.kbx .kbx-graph-relation span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kbx .kbx-graph-relation b { font-weight: 500; color: #9fb4b8; font-size: 11px; }
+.kbx .kbx-graph-relation.is-off { opacity: .38; }
+.kbx .kbx-graph-relation.is-off span { text-decoration: line-through; }
+@media (max-width: 700px) { .kbx .kbx-graph-relations { width: 150px; } }

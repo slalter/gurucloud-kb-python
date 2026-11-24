@@ -33,6 +33,7 @@ from gurucloud_kb.errors import (
     PlaybookStepConflictError,
     PlaybookVersionConflictError,
     RateLimitError,
+    StaleEditError,
 )
 from gurucloud_kb.kb import KnowledgeBank
 from gurucloud_kb.ui_server import serve_ui, start_ui_server
@@ -111,7 +112,13 @@ from gurucloud_kb.types import (
     BUILTIN_EDGE_TYPES,
     EdgeRelation,
     EdgeRelationConfig,
+    EdgeRelationEvent,
+    EdgeRelationMerge,
+    EdgeRelationRetirement,
+    EdgeRelationProposal,
     EdgeRelationVocabulary,
+    EdgeTypeRow,
+    EdgeTypes,
     EntryConnections,
     EntryEdge,
     GraphNeighborhood,
@@ -190,6 +197,7 @@ __all__ = [
     "PlaybookRunError",
     "PlaybookStepConflictError",
     "PlaybookVersionConflictError",
+    "StaleEditError",
     "ConnectionError",
     # Types
     "KBInfo",
@@ -249,7 +257,13 @@ __all__ = [
     "BUILTIN_EDGE_TYPES",
     "EdgeRelation",
     "EdgeRelationConfig",
+    "EdgeRelationEvent",
+    "EdgeRelationMerge",
+    "EdgeRelationRetirement",
+    "EdgeRelationProposal",
     "EdgeRelationVocabulary",
+    "EdgeTypeRow",
+    "EdgeTypes",
     "EntryConnections",
     "EntryEdge",
     "GraphNeighborhood",
@@ -323,4 +337,4 @@ __all__ = [
     "OverlapCandidate",
 ]
 
-__version__ = "0.20.2"
+__version__ = "0.24.0"

@@ -32,7 +32,10 @@ EFFECTFUL_MODULES: frozenset[str] = frozenset({
     "subprocess", "shutil", "os", "io", "tempfile", "pathlib", "glob",
     "fastapi", "flask", "starlette", "celery", "threading", "multiprocessing",
     "asyncio", "logging", "smtplib", "imaplib", "ftplib", "paramiko",
-    "db", "models", "tasks", "services",  # repo-local layers that reach I/O
+    "stripe",
+    # repo-local layers that reach I/O (`config` reads Secret Manager through
+    # `access_secret` / `load_secret_values`; kanban 4bba5fcf)
+    "db", "models", "tasks", "services", "config",
 })
 # Names on module-level imports that are pure despite living in an effectful
 # package (e.g. `from pathlib import PurePosixPath` only manipulates strings).
@@ -108,7 +111,17 @@ def _function_reasons(fn: ast.AST) -> tuple[list[str], list[str]]:
     effectful: list[str] = []
     nondet: list[str] = []
     for node in ast.walk(fn):
-        if isinstance(node, (ast.Global, ast.Nonlocal)):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if _module_root(alias.name) in EFFECTFUL_MODULES and alias.name not in PURE_IMPORT_EXCEPTIONS:
+                    effectful.append(f"local import {alias.name}")
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            if _module_root(node.module) in EFFECTFUL_MODULES and node.module not in PURE_IMPORT_EXCEPTIONS:
+                for alias in node.names:
+                    full = f"{node.module}.{alias.name}"
+                    if full not in PURE_IMPORT_EXCEPTIONS:
+                        effectful.append(f"local import {full}")
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
             effectful.append(f"{type(node).__name__.lower()} statement")
         elif isinstance(node, ast.Call):
             name = _dotted(node.func)
@@ -127,6 +140,21 @@ def _function_reasons(fn: ast.AST) -> tuple[list[str], list[str]]:
     return effectful, nondet
 
 
+def _effectful_aliases(tree: ast.Module, eff_imports: set[str]) -> dict[str, str]:
+    """Module-level ``x = imported_fn`` bindings of an effectful import: alias -> import."""
+    by_local = {i.split(".")[-1]: i for i in eff_imports}
+    aliases: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Name):
+            source = by_local.get(node.value.id) or aliases.get(node.value.id)
+            if source is None:
+                continue
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    aliases[target.id] = source
+    return aliases
+
+
 def classify_source(source: str, path: str = "<memory>", symbol: Optional[str] = None) -> PurityVerdict:
     """Classify a whole module, or one top-level function/class named ``symbol``."""
     try:
@@ -135,6 +163,7 @@ def classify_source(source: str, path: str = "<memory>", symbol: Optional[str] =
         return PurityVerdict(path, symbol, "effectful", [f"unparseable: {exc.msg}"])
 
     eff_imports, nd_imports = _import_names(tree)
+    aliases = _effectful_aliases(tree, eff_imports) if isinstance(tree, ast.Module) else {}
     reasons: list[str] = []
     nondet_reasons: list[str] = []
 
@@ -160,6 +189,7 @@ def classify_source(source: str, path: str = "<memory>", symbol: Optional[str] =
             # A single symbol inherits effectful imports only if it uses them.
             used = {_module_root(_dotted(c.func) or "") for c in ast.walk(node) if isinstance(c, ast.Call)}
             used_eff = sorted(i for i in eff_imports if _module_root(i) in used or i.split(".")[-1] in used)
+            used_eff += sorted(f"{a} (= {aliases[a]})" for a in used if a in aliases)
             if used_eff:
                 reasons.append(f"{node.name}: uses " + ", ".join(used_eff))
 

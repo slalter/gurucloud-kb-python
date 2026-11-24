@@ -249,6 +249,24 @@ accepted. Any other key raises `ValueError` before the request is sent, and
 the server rejects it as well (400 `unknown_field`); until 0.5.6 such keys
 were silently ignored while the call still returned success.
 
+To avoid overwriting a change that landed after you read the entry (a dedup
+merge, another agent's edit), pass the state you edited from. If the live entry
+no longer matches, nothing is written and `StaleEditError` is raised:
+
+```python
+from gurucloud_kb import StaleEditError
+
+entry = kb.get_entry(entry_id)
+try:
+    kb.update_entry(entry_id, content=new_text, expected_updated_at=entry["updated_at"])
+except StaleEditError as exc:
+    live = exc.current_state          # the live entry: re-apply your edit to it
+    print(exc.mismatched)             # ["updated_at"] and/or ["content_sha256"]
+```
+
+`expected_content_sha256` (SHA-256 hex digest of the `content` you read) works
+the same way. On their own the two keys change nothing.
+
 ---
 
 ## Search
@@ -518,6 +536,64 @@ refused with `edge_types_in_use` (HTTP 409); retype or delete those first.
 The declaration lives on the dimension schema (`edge_relations`,
 `edge_relations_replace_defaults`), so `client.create_kb(...)` and
 `kb.update(...)` accept it too. Requires `write` scope.
+
+### A relation list that grows with the bank
+
+A bank can let its agents add the relations they find missing, so the list
+follows what the bank's subject needs instead of being fixed up front:
+
+```python
+kb.set_edge_relations_open(True)             # agents may now coin relations
+
+out = kb.propose_edge_relation(
+    "blocks", "from prevents to from proceeding until from is resolved",
+    inverse="is blocked by",
+    example={"from_text": "the migration lock is held", "to_text": "the deploy runs migrations"},
+)
+out["status"]   # "added" | "use_existing" | "exists"
+out["use"]      # the relation to connect with
+if out.get("reversed"):                      # mapped to a relation that reads from the other end
+    lock_id, deploy_id = deploy_id, lock_id
+kb.connect(lock_id, deploy_id, out["use"])
+
+for r in kb.edge_types()["relations"]:       # the whole list, with usage
+    print(r["name"], r["origin"], r["edge_count"])
+kb.list_connections(edge_type="blocks", include_ends=True)   # the connections of one relation
+kb.edge_relation_events(relation="blocks")   # who proposed it, and what the judge said
+```
+
+Every proposal goes through a judge that reads the bank's whole list first.
+A relation the bank already has under another name is mapped to it: the
+answer is `use_existing` with the name to use, and `reversed: true` when the
+match reads from the other end (`needed_by` is `requires` with the two
+entries swapped). Only a relation that says something new is `added`, with
+`origin: "coined"`, who coined it and when. Without a model credential the
+relation is added unchecked and the answer says so (`judged: false`). There
+is no cap on how many relations agents add; a closed bank answers
+`edge_relations_closed` (HTTP 403). Agents on the hosted MCP server get the
+same thing through `get_edge_types` and `link_kb_entries` with a
+`relation_description`: there a mapped relation is connected in the same
+call and the result says "X was automatically mapped to Y".
+
+Two relations that turn out to mean the same are folded together afterwards,
+and one nobody uses is dropped:
+
+```python
+plan = kb.merge_edge_relation("needed_by", "requires", swap_ends=True, dry_run=True)
+plan["retyped"], plan["duplicates_removed"]  # what would change; nothing has yet
+kb.merge_edge_relation("needed_by", "requires", swap_ends=True, reason="same meaning")
+kb.retire_edge_relation("pairs_with")        # only when no connection carries it
+```
+
+A merge retypes every connection of the first relation to the second, keeping
+each connection's id, note and history (`evidence.retyped_from`), removes a
+connection that already exists under the second relation, and takes the first
+off the list. `swap_ends=True` turns each connection around, for two relations
+that read from opposite ends. Only a relation the bank added can go: a
+built-in answers `relation_not_removable` (HTTP 409). Both calls need `write`
+scope and manage rights on the bank, and both land in
+`kb.edge_relation_events()` as `merged` / `retired` with the removed
+definition.
 
 ### Backfill the connections a bank already implies
 
@@ -1122,6 +1198,64 @@ edit the harness, they file a card.
 ---
 
 ## Changelog
+
+### 0.24.0
+
+- `kb.get_playbook(..., include_step_knowledge=True)` takes three size limits for the
+  step-knowledge block (kb-platform >= 1.16.0; an older platform ignores them):
+  `step_knowledge_budget_chars` (the whole block, in serialised characters, never above
+  the platform ceiling of 60 000), `step_knowledge_entry_chars` (every body cut to that
+  length and marked `excerpt` with `content_chars`; `0` returns handles only) and
+  `step_knowledge_max_entries` (entries kept per step; the rest are listed in the
+  step's `omitted_ids`). Over the budget, an entry shown under several steps keeps its
+  place under one and the other steps list it in `shown_at` (entry id -> that step); further bodies drop to handles
+  listed in `knowledge["truncated_ids"]`. `knowledge` reports `max_chars`, `chars`,
+  `excerpted`, `repeated` and `omitted`. Read any cut entry with `get_entry`. Sync and
+  async. Pass `include_linked_entries=False` with step knowledge, or the linked entries
+  travel twice.
+
+### 0.23.0
+
+- `kb.update_entry(..., expected_updated_at=..., expected_content_sha256=...)` sends the
+  stale-edit precondition: when the entry changed after you read it (for example a
+  dedup merge landed), nothing is written and `StaleEditError` (412 `stale_edit`) is
+  raised with the live entry in `current_state`. The keys are also accepted in a raw
+  `updates` mapping; on their own they change nothing.
+
+### 0.22.1
+
+- KB Explorer Map: a playbook step that cites several entries now draws one edge to
+  each of them that is on the map, not only to the first; its tooltip says how many
+  of its cited entries are on the map.
+
+### 0.22.0
+
+- `kb.merge_edge_relation(name, into, swap_ends=False, dry_run=False)` folds a relation
+  the bank added into another: its connections are retyped in place, duplicates are
+  removed and the relation leaves the list. `kb.retire_edge_relation(name)` drops one
+  no connection carries. Both are audited (`merged` / `retired` in
+  `kb.edge_relation_events()`).
+- Explorer: Merge and Remove on the Relations tab for a relation the bank added, with
+  a preview of what a merge would change.
+
+### 0.21.1
+
+- `kb.propose_edge_relation(...)` answers `reversed` with `use_existing`: the proposal
+  was mapped to an existing relation that reads from the other end, so connect with
+  the two entries swapped. The 40-relation cap on coined relations is gone.
+
+### 0.21.0
+
+- Living relation vocabulary. `kb.edge_types()` lists every relation with its origin
+  (`builtin`, `declared`, `coined`), connection count and a sample connection.
+  `kb.propose_edge_relation(name, description, inverse=...)` coins a relation on a bank
+  opened with `kb.set_edge_relations_open(True)`: a judge first checks that no existing
+  relation means the same, and the answer names the relation to use.
+  `kb.edge_relation_events()` reads the vocabulary's audit trail.
+- Explorer: a Relations tab (colour, meaning, origin and count per relation, the
+  connections of the selected one) and a relation legend on the Graph tab that
+  filters the picture by relation.
+- `kb.list_connections(..., include_ends=True)` returns what each end says under `ends`.
 
 ### 0.20.2
 

@@ -164,6 +164,12 @@ class EntryUpdate(TypedDict, total=False):
     remove_systems: list[str]
     add_tasks: list[str]
     remove_tasks: list[str]
+    expected_updated_at: str
+    """Stale-edit precondition: the ``updated_at`` (ISO-8601) you read. A
+    mismatch with the live entry is a 412 ``stale_edit`` and nothing is
+    written. Not a change on its own."""
+    expected_content_sha256: str
+    """Stale-edit precondition: SHA-256 hex digest of the ``content`` you read."""
 
 
 class EntryInput(TypedDict, total=False):
@@ -814,7 +820,9 @@ class ProcessStepDetail(TypedDict, total=False):
     """The documentation fields of one hand-off of a ``process``: who does it on
     the client side (``actor``, required on every non-end step), in which
     ``system`` or record, what it ``needs``, who it ``hands_to``, the known
-    ``exceptions`` and the ``source`` (who told us, when)."""
+    ``exceptions`` and the ``source`` (who told us, when). ``observed_as`` says
+    where the step shows up in recorded work (``<product>:<screen>#<action>``
+    bindings separated by ``;``) or ``unrecorded: <where>``."""
 
     actor: str
     system: str
@@ -822,6 +830,7 @@ class ProcessStepDetail(TypedDict, total=False):
     hands_to: str
     exceptions: str
     source: str
+    observed_as: str
 
 
 class StepTransition(TypedDict, total=False):
@@ -927,12 +936,16 @@ class StepKnowledgeEntry(TypedDict, total=False):
     """``<playbook slug> > <step key or position> > <entry title>``."""
     how_linked: str
     content: str | None
-    """Full text for ``linked`` / ``cited_by``; None on ``related`` unless ``related_full``, or when the size cap dropped it."""
+    """Full text for ``linked`` / ``cited_by``; None on ``related`` unless ``related_full``, or when the size budget dropped it."""
     useful_for: str | None
     summary: str | None
     score: float | None
     note: str | None
     missing: bool
+    excerpt: bool
+    """True when ``content`` is the start of a longer body (``step_knowledge_entry_chars``)."""
+    content_chars: int | None
+    """Length of the whole body when it was cut or dropped."""
 
 
 class StepKnowledge(TypedDict, total=False):
@@ -941,6 +954,10 @@ class StepKnowledge(TypedDict, total=False):
     linked: list[StepKnowledgeEntry]
     cited_by: list[StepKnowledgeEntry]
     related: list[StepKnowledgeEntry]
+    omitted_ids: list[str]
+    """Entries the per-step limit or the size budget left out of this step."""
+    shown_at: dict[str, str]
+    """Entries tied to this step that the answer carries under another step: entry id -> that step."""
 
 
 class PlaybookKnowledge(TypedDict, total=False):
@@ -950,9 +967,14 @@ class PlaybookKnowledge(TypedDict, total=False):
     related_top_k: int
     related_full: bool
     max_chars: int
+    entry_max_chars: int | None
+    max_entries_per_step: int | None
     chars: int
     truncated: bool
     truncated_ids: list[str]
+    excerpted: int
+    repeated: int
+    omitted: int
     search_failures: list[str]
 
 
@@ -1287,13 +1309,91 @@ class EdgeRelationConfig(TypedDict, total=False):
     transitive: bool  # A -r-> B -r-> C implies A -r-> C (bridging a deleted entry keeps the type)
     symmetric: bool  # reads the same from both ends
     representative: Literal["from", "to"] | None  # which end stands for a connected group when search collapses
+    inverse: str  # how it reads from the to-side ("is blocked by")
+    coined_by: str | None  # set when an agent coined it (kb.propose_edge_relation)
+    coined_at: str | None  # UTC ISO-8601
 
 
 class EdgeRelation(EdgeRelationConfig, total=False):
     """One relation of a bank's effective vocabulary (``kb.edge_relations()``)."""
 
-    origin: Literal["builtin", "declared"]
+    origin: Literal["builtin", "declared", "coined"]
     system: bool  # written by the service itself (bridging, backfill, approved similar pairs)
+
+
+class EdgeTypeSample(TypedDict, total=False):
+    """The newest connection of a relation, with what each end says."""
+
+    edge: dict[str, Any]
+    from_end: dict[str, Any] | None
+    to_end: dict[str, Any] | None
+
+
+class EdgeTypeRow(EdgeRelation, total=False):
+    """One relation in ``kb.edge_types()``."""
+
+    edge_count: int
+    sample: EdgeTypeSample | None
+
+
+class EdgeTypes(TypedDict, total=False):
+    """``kb.edge_types()``: the vocabulary joined to the stored connections."""
+
+    open: bool  # agents may coin relations in this bank
+    total_edges: int
+    relations: list[EdgeTypeRow]
+    undeclared: dict[str, int]  # stored relations the vocabulary no longer declares
+
+
+class EdgeRelationProposal(TypedDict, total=False):
+    """``kb.propose_edge_relation(...)``: what happened and the relation to use."""
+
+    status: Literal["added", "exists", "use_existing"]
+    use: str  # the relation name to connect with
+    reversed: bool  # with use_existing: connect with from and to swapped
+    relation: EdgeRelation
+    judged: bool  # False when it was added without a duplicate check
+    message: str
+    judgement: dict[str, Any] | None
+    event_id: str | None
+
+
+class EdgeRelationEvent(TypedDict, total=False):
+    """One row of the vocabulary's audit trail (``kb.edge_relation_events()``)."""
+
+    id: str
+    action: str  # added | use_existing | exists | refused_closed | opened | closed | merged | retired
+    relation: str | None
+    resolved_relation: str | None
+    actor: str | None
+    reason: str | None
+    payload: dict[str, Any]
+    created_at: str | None
+
+
+class EdgeRelationMerge(TypedDict, total=False):
+    """``kb.merge_edge_relation(...)``: what folding one relation into another did."""
+
+    relation: str  # the relation that was merged away
+    into: str  # the relation its connections now carry
+    swap_ends: bool
+    dry_run: bool  # True: these are the counts of what would happen, nothing changed
+    edges: int  # connections that carried ``relation``
+    retyped: int
+    duplicates_removed: int  # already existed as ``into`` between the same two entries
+    removed: bool  # ``relation`` is no longer in the bank's list
+    left_behind: list[str]  # step connections written mid-merge that could not be swapped
+    event_id: str | None
+    message: str
+
+
+class EdgeRelationRetirement(TypedDict, total=False):
+    """``kb.retire_edge_relation(...)``."""
+
+    relation: str
+    removed: bool
+    event_id: str | None
+    message: str
 
 
 class EdgeRelationVocabulary(TypedDict, total=False):
@@ -1302,6 +1402,7 @@ class EdgeRelationVocabulary(TypedDict, total=False):
     relations: list[EdgeRelation]  # effective vocabulary, built-ins first then declared
     declared: list[EdgeRelationConfig]  # exactly what the bank declared
     replace_defaults: bool
+    open: bool  # agents may coin relations (kb.set_edge_relations_open)
     system_relations: list[str]  # relations a replacing vocabulary must keep
 
 EdgeSource = Literal["author", "judge", "backfill_citation", "backfill_metadata", "bridged", "import"]
@@ -1377,6 +1478,7 @@ class ConnectionList(TypedDict, total=False):
     edges: list[EntryEdge]
     limit: int
     offset: int
+    ends: dict[str, dict[str, Any]]  # with include_ends: what each connected entry says, by id
 
 
 class EdgeStats(TypedDict, total=False):

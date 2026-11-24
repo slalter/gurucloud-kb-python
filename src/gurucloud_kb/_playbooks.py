@@ -125,6 +125,9 @@ def detail_params(
     related_top_k: int | None = None,
     related_banks: list[str] | None = None,
     related_full: bool = False,
+    step_knowledge_budget_chars: int | None = None,
+    step_knowledge_entry_chars: int | None = None,
+    step_knowledge_max_entries: int | None = None,
 ) -> dict[str, Any]:
     """Query for GET /playbooks/{slug}. The step-knowledge params travel only
     when ``include_step_knowledge`` is on, so a plain read keeps its wire shape."""
@@ -138,6 +141,12 @@ def detail_params(
         params["related_banks"] = ",".join(b.strip() for b in related_banks if b.strip())
     if related_full:
         params["related_full"] = "true"
+    limits = {
+        "step_knowledge_budget_chars": step_knowledge_budget_chars,
+        "step_knowledge_entry_chars": step_knowledge_entry_chars,
+        "step_knowledge_max_entries": step_knowledge_max_entries,
+    }
+    params.update({name: value for name, value in limits.items() if value is not None})
     return params
 
 

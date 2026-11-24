@@ -11,7 +11,7 @@
                                                      (platform mode) and send it on
                                                      every API call
      ></div>
-   Panels: Entries · Map · Graph · Ask · Similar · Playbooks · Process search · Schema · Quality · History · Connect.
+   Panels: Entries · Map · Graph · Relations · Ask · Similar · Playbooks · Process search · Schema · Quality · History · Connect.
 
    User-action recording (kanban 812c0da2): every control carries a stable
    data-action name (tab_<panel>, <panel>_<verb>[_<object>]) plus data-target-*
@@ -23,6 +23,7 @@ import { createApi } from './api.js';
 import { createEntriesView } from './entries.js';
 import { createMapView } from './map.js';
 import { createGraphView } from './graph.js';
+import { createRelationsView } from './relations.js';
 import { createAskView } from './ask.js';
 import { createSimilarView } from './similar.js';
 import { createPlaybooksView } from './playbooks.js';
@@ -40,6 +41,7 @@ const PANELS = [
   { id: 'entries', label: 'Entries', icon: 'bi-collection', make: createEntriesView },
   { id: 'map', label: 'Map', icon: 'bi-diagram-3', make: createMapView },
   { id: 'graph', label: 'Graph', icon: 'bi-share', make: createGraphView },
+  { id: 'relations', label: 'Relations', icon: 'bi-bezier2', make: createRelationsView },
   { id: 'ask', label: 'Ask', icon: 'bi-chat-dots', make: createAskView },
   { id: 'similar', label: 'Similar', icon: 'bi-intersect', make: createSimilarView },
   { id: 'playbooks', label: 'Playbooks', icon: 'bi-journal-text', make: createPlaybooksView },
