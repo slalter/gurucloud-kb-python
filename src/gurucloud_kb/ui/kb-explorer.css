@@ -106,6 +106,13 @@
 .kbx-charter-body { max-width: 72ch; white-space: pre-line; overflow-wrap: anywhere; margin-top: 6px; padding: 10px 12px; border-radius: 8px; background: var(--kbx-surface-2, rgba(0,0,0,.03)); color: var(--kbx-body); max-height: 260px; overflow-y: auto; }
 .kbx-handoff-details { margin: 10px 0 4px; }
 .kbx-handoff-details > summary { cursor: pointer; font-size: 14px; font-weight: 600; color: var(--kbx-heading); margin-bottom: 6px; }
+/* Client terms (kind=term) in a process view: dotted underline, hover title, tap/Enter toasts the meaning. */
+.kbx-term { text-decoration: underline dotted var(--kbx-primary); text-underline-offset: 3px; cursor: help; border-radius: 2px; }
+.kbx-term:hover, .kbx-term:focus-visible { background: var(--kbx-primary-wash); outline: none; }
+.kbx-term-note { position: fixed; inset: auto; margin: 0; max-width: min(340px, calc(100vw - 16px)); padding: 10px 12px; border: 1px solid var(--kbx-border); border-radius: var(--kbx-radius-sm); background: var(--kbx-surface, #fff); color: var(--kbx-heading); box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14); font-size: 13px; line-height: 1.45; }
+.kbx-glossary { margin: 14px 0 4px; }
+.kbx-glossary > h4 { font-size: 14px; font-weight: 600; color: var(--kbx-heading); margin: 0 0 8px; }
+@media (max-width: 600px) { .kbx-glossary .kbx-kv { grid-template-columns: minmax(0, 1fr); gap: 2px 0; } .kbx-glossary .kbx-kv dd { margin-bottom: 8px; } }
 .kbx-header-actions { display: flex; align-items: center; gap: var(--mk-space-sm); flex-wrap: wrap; }
 
 /* Guru mascot mark — teal circle + white pill pupils (binding brand rule,

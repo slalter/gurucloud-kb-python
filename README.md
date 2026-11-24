@@ -1199,6 +1199,18 @@ edit the harness, they file a card.
 
 ## Changelog
 
+### 0.25.0
+
+- Explorer (`gurucloud-kb ui` and every host of the bundle): a business bank's client
+  terms show in place on a process. Entries of `kind` `term` (metadata `term` = the
+  abbreviation as the client writes it, content opening with what it stands for) are
+  underlined wherever the process modal uses them, plurals included. Hover shows the
+  meaning; a tap or Enter opens it in a popover above the modal. The modal ends with
+  a "Terms on this page" list. A bank with no term entries, or a failed read, shows
+  the process unchanged. No SDK API change.
+- The kind picker offers the current business vocabulary (workflow, role, system,
+  rule, gap, example, term) instead of the generation-1 list.
+
 ### 0.24.0
 
 - `kb.get_playbook(..., include_step_knowledge=True)` takes three size limits for the

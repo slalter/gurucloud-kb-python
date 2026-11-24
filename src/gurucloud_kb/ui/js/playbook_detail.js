@@ -10,6 +10,7 @@ import { markdownToText } from './markdown_model.js';
 import { sortSteps, stepKind, describeTransitions, isBranching, cleanStep, stepEntryIds } from './playbook_graph.js';
 import { runsSection } from './playbook_runs.js';
 import { isProcess, handoffRows, optionalColumns, processMetaPairs, PROCESS_PROVENANCE } from './process_view.js';
+import { glossaryFromEntries, segmentText, termListParams, termsUsed } from './glossary_model.js';
 
 export const STATUS_CHIP = { active: 'success', draft: 'warn', superseded: 'muted' };
 const MIN_DELETE_REASON = 20;
@@ -24,6 +25,9 @@ export async function openPlaybookDetail(ctx, slug, { onChanged, highlight } = {
   catch (e) { ref.setBody(h('div', { class: 'kbx-alert danger' }, `Could not load: ${e.message}`)); return; }
   const process = isProcess(pb);
   if (process && ref.setTitle) ref.setTitle('Process');
+  // A process underlines the bank's client terms (kind=term); no terms, or a failed fetch, renders plain text.
+  const glossary = process ? await loadGlossary(api) : [];
+  const t = (text) => withTerms(text, glossary);
 
   const linkedById = {};
   (pb.linked_entries || []).forEach((le) => { linkedById[le.id] = le; });
@@ -36,9 +40,9 @@ export async function openPlaybookDetail(ctx, slug, { onChanged, highlight } = {
     steps.append(h('li', { class: `kbx-step${hits.has(Number(st.position)) ? ' is-hit' : ''}` },
       h('span', { class: 'kbx-step-num' }),
       h('div', { class: 'kbx-step-body' },
-        h('div', { class: 'kbx-step-title' }, st.title, stepBadges(st)),
-        process && st.process && st.process.actor ? h('div', { class: 'kbx-muted', dataset: { role: 'step-actor' }, style: { fontSize: '12px', marginBottom: '2px' } }, h('i', { class: 'bi bi-person' }), ` ${st.process.actor}`, st.process.system ? ` · ${st.process.system}` : '') : null,
-        h('div', { class: 'kbx-step-text' }, st.body),
+        h('div', { class: 'kbx-step-title' }, ...t(st.title), stepBadges(st)),
+        process && st.process && st.process.actor ? h('div', { class: 'kbx-muted', dataset: { role: 'step-actor' }, style: { fontSize: '12px', marginBottom: '2px' } }, h('i', { class: 'bi bi-person' }), ' ', ...t(st.process.actor), ...(st.process.system ? [' · ', ...t(st.process.system)] : [])) : null,
+        h('div', { class: 'kbx-step-text' }, ...t(st.body)),
         transitionList(st, ordered),
         ...entryIds.map((entryId) => {
           const linked = linkedById[entryId];
@@ -59,10 +63,10 @@ export async function openPlaybookDetail(ctx, slug, { onChanged, highlight } = {
     // The agent-facing "not a procedure for you" banner stays on the MCP read (documentation_banner);
     // a person reading the explorer gets one line of provenance (kanban 39aa973f).
     process ? h('p', { class: 'kbx-muted', dataset: { role: 'process-provenance' }, style: { fontSize: '12px', margin: '0 0 12px' } }, h('i', { class: 'bi bi-info-circle' }), ` ${PROCESS_PROVENANCE}`) : null,
-    h('div', { class: 'kbx-alert info', style: { marginBottom: '14px' } }, h('i', { class: process ? 'bi bi-diagram-3' : 'bi bi-signpost-2' }), h('div', {}, h('strong', {}, process ? 'About — ' : 'When to use — '), pb.when_to_use)),
-    pb.summary ? h('p', { style: { color: 'var(--kbx-body)', marginTop: 0 } }, pb.summary) : null,
+    h('div', { class: 'kbx-alert info', style: { marginBottom: '14px' } }, h('i', { class: process ? 'bi bi-diagram-3' : 'bi bi-signpost-2' }), h('div', {}, h('strong', {}, process ? 'About — ' : 'When to use — '), ...t(pb.when_to_use))),
+    pb.summary ? h('p', { style: { color: 'var(--kbx-body)', marginTop: 0 } }, ...t(pb.summary)) : null,
     process ? processMeta(pb.metadata) : null,
-    process ? handoffTable(ordered, { highlight: hits }) : null,
+    process ? handoffTable(ordered, { highlight: hits, glossary }) : null,
     // A process already lists every hand-off in the table: the step cards are the long form, collapsed.
     process
       ? h('details', { class: 'kbx-handoff-details', dataset: { role: 'handoff-details' } },
@@ -70,6 +74,7 @@ export async function openPlaybookDetail(ctx, slug, { onChanged, highlight } = {
           steps)
       : h('h4', { style: { fontSize: '14px', color: 'var(--kbx-heading)', margin: '10px 0 4px' } }, `${n} step${n === 1 ? '' : 's'}`),
     process ? null : steps,
+    process ? glossarySection(pb, ordered, glossary) : null,
     process ? null : runsSection(ctx, pb),
     h('dl', { class: 'kbx-kv kbx-mt-lg' },
       h('dt', {}, 'Created'), h('dd', {}, fmtDate(pb.created_at)),
@@ -103,8 +108,9 @@ function processMeta(metadata) {
 }
 
 /** The hand-off table of a documented process: step, actor, what happens, system, hands to (+ needs / exceptions / source when filled). */
-export function handoffTable(orderedSteps, { highlight } = {}) {
+export function handoffTable(orderedSteps, { highlight, glossary } = {}) {
   const hits = highlight instanceof Set ? highlight : new Set((highlight || []).map(Number));
+  const t = (text) => withTerms(text, glossary || []);
   const rows = handoffRows(orderedSteps);
   const extra = optionalColumns(rows);
   const EXTRA_LABEL = { needs: 'Needs', exceptions: 'Exceptions', source: 'Source' };
@@ -114,11 +120,70 @@ export function handoffTable(orderedSteps, { highlight } = {}) {
       h('thead', {}, h('tr', {}, ...head.map((c) => h('th', {}, c)))),
       h('tbody', {}, ...rows.map((r, i) => h('tr', { class: hits.has(Number(r.position)) ? 'is-hit' : null, dataset: { role: 'handoff-row', key: r.key || '' } },
         h('td', {}, h('div', { class: 'kbx-strong' }, String(r.position)), r.key ? h('div', { class: 'kbx-mono kbx-muted', style: { fontSize: '11px' } }, r.key) : null),
-        h('td', {}, r.actor ? h('span', { class: 'kbx-strong' }, r.actor) : h('span', { class: 'kbx-muted' }, r.kind === 'end' ? '—' : '(no actor)')),
-        h('td', {}, h('div', { class: 'kbx-strong' }, r.title), h('div', { class: 'kbx-muted', style: { fontSize: '12px' } }, r.body)),
-        h('td', {}, r.system || '—'),
-        h('td', {}, r.hands_to || '—', branchLines(orderedSteps[i], orderedSteps)),
-        ...extra.map((c) => h('td', {}, r[c] || '—')))))));
+        h('td', {}, r.actor ? h('span', { class: 'kbx-strong' }, ...t(r.actor)) : h('span', { class: 'kbx-muted' }, r.kind === 'end' ? '—' : '(no actor)')),
+        h('td', {}, h('div', { class: 'kbx-strong' }, ...t(r.title)), h('div', { class: 'kbx-muted', style: { fontSize: '12px' } }, ...t(r.body))),
+        h('td', {}, ...(r.system ? t(r.system) : ['—'])),
+        h('td', {}, ...(r.hands_to ? t(r.hands_to) : ['—']), branchLines(orderedSteps[i], orderedSteps)),
+        ...extra.map((c) => h('td', {}, ...(r[c] ? t(r[c]) : ['—']))))))));
+}
+
+/** The bank's glossary (kind=term entries); [] when the bank has none or the read fails. */
+async function loadGlossary(api) {
+  try { return glossaryFromEntries(await api.listEntries(termListParams())); }
+  catch (_) { return []; }
+}
+
+/** Text as nodes, each glossary term an underlined <abbr>: hover shows the meaning, a tap or Enter opens it in a popover. */
+export function withTerms(text, glossary) {
+  if (text == null || text === '') return [];
+  return segmentText(text, glossary).map((seg) => (seg.term
+    ? h('abbr', {
+      class: 'kbx-term', title: seg.term.meaning, tabindex: '0', role: 'button',
+      dataset: { action: 'process_term_open', targetTerm: seg.term.term, targetEntryId: seg.term.entryId, outcome: 'panel_open' },
+      onClick: (ev) => showTermNote(ev.currentTarget, seg.term),
+      onKeydown: (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); showTermNote(ev.currentTarget, seg.term); } },
+    }, seg.text)
+    : seg.text));
+}
+
+/**
+ * The meaning of a tapped term, in a popover under it. A popover opens in the top
+ * layer, above the modal <dialog>; a toast lands behind it (kanban 5adfa9fa E2E).
+ * Light-dismissed by a tap elsewhere or Esc. Browsers without popovers get a toast.
+ */
+function showTermNote(anchor, term) {
+  const host = anchor.closest('dialog') || document.body;
+  if (typeof HTMLElement.prototype.showPopover !== 'function') { toast(`${term.term}: ${term.meaning}`, 'info'); return; }
+  let note = host.querySelector(':scope > .kbx-term-note');
+  if (!note) {
+    note = h('div', { class: 'kbx kbx-term-note', popover: 'auto', role: 'tooltip', dataset: { role: 'term-note' } });
+    host.append(note);
+    // It is placed in viewport coordinates: a scroll would leave it over other content, so a scroll closes it.
+    host.addEventListener('scroll', () => { if (note.matches(':popover-open')) note.hidePopover(); }, { capture: true, passive: true });
+  }
+  if (note.matches(':popover-open')) note.hidePopover();
+  note.replaceChildren(h('strong', { class: 'kbx-mono' }, term.term), ' ', term.meaning);
+  // Measure at the origin: measured where it last sat, it shrink-wraps against the right edge.
+  note.style.left = '0px';
+  note.style.top = '0px';
+  note.showPopover();
+  const r = anchor.getBoundingClientRect();
+  const w = note.offsetWidth;
+  const left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8));
+  const below = r.bottom + 6 + note.offsetHeight <= window.innerHeight - 8;
+  note.style.left = `${left}px`;
+  note.style.top = `${below ? r.bottom + 6 : Math.max(8, r.top - note.offsetHeight - 6)}px`;
+}
+
+/** "Terms on this page": every glossary term the process text uses, with its meaning (null when none). */
+function glossarySection(pb, ordered, glossary) {
+  const texts = [pb.when_to_use, pb.summary];
+  handoffRows(ordered).forEach((r) => texts.push(r.title, r.body, r.actor, r.system, r.hands_to, r.needs, r.exceptions, r.source));
+  const used = termsUsed(texts, glossary);
+  if (!used.length) return null;
+  return h('section', { class: 'kbx-glossary', dataset: { role: 'process-glossary' } },
+    h('h4', {}, 'Terms on this page'),
+    h('dl', { class: 'kbx-kv' }, ...used.flatMap((g) => [h('dt', { class: 'kbx-mono' }, g.term), h('dd', {}, g.meaning)])));
 }
 
 /** Under a decision's "Hands to": where each answer goes ("when X → KEY"), so a branch is readable in the table. */

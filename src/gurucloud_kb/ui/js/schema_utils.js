@@ -8,7 +8,7 @@ export const DEFAULT_DIMS = [
 ];
 
 /** The business-bank `kind` vocabulary (kb_defaults.BUSINESS_KB_KINDS). */
-export const BUSINESS_KINDS = ['decision', 'commitment', 'constraint', 'process', 'preference', 'gap'];
+export const BUSINESS_KINDS = ['workflow', 'role', 'system', 'rule', 'gap', 'example', 'term'];
 
 const DEFAULT_NAMES = new Set(DEFAULT_DIMS.map((d) => d.name));
 
